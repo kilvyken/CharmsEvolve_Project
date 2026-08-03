@@ -8,11 +8,8 @@
     <Nullable>disable</Nullable>
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
-
     <!--
-      使用方式：
       dotnet build -c Release -p:HollowKnightDir="D:\Steam\steamapps\common\Hollow Knight"
-      也可以直接在此处写死 HollowKnightDir。
     -->
     <HollowKnightDir Condition="'$(HollowKnightDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Hollow Knight</HollowKnightDir>
     <ManagedDir>$(HollowKnightDir)\hollow_knight_Data\Managed</ManagedDir>
@@ -29,9 +26,13 @@
       <Private>false</Private>
     </Reference>
     <Reference Include="netstandard">
-      <HintPath>..\..\..\..\hollow_knight_Data\Managed\netstandard.dll</HintPath>
+      <HintPath>$(ManagedDir)\netstandard.dll</HintPath>
+      <Private>false</Private>
     </Reference>
-
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(ManagedDir)\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="UnityEngine">
       <HintPath>$(ManagedDir)\UnityEngine.dll</HintPath>
       <Private>false</Private>

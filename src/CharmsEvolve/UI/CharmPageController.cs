@@ -30,6 +30,18 @@ namespace CharmsEvolve.UI
         private static readonly Vector3 PageSelectorPosition = new Vector3(0.6f, 1.4f, -3.33f);
         private static readonly Vector2 PageSelectorColliderSize = new Vector2(1.3f, 1.3f);
 
+        // The Unity 6 UI Charms FSM does not expose CharmPreset's old Idle Preset
+        // state.  Keep the native cursor on its real charm item and treat the page
+        // selector as a small logical focus layer.  This avoids feeding a foreign
+        // GameObject into Update Cursor, which made the native cursor disappear and
+        // allowed LEFT/RIGHT to reach the equip/unequip states.
+        private enum SelectorOrigin
+        {
+            None,
+            Equipment,
+            Grid
+        }
+
         private sealed class MarkerState
         {
             public GameObject GameObject;
@@ -101,10 +113,18 @@ namespace CharmsEvolve.UI
         private Component _pageSelectorCollider;
         private readonly Sprite[] _pageSelectorSprites = new Sprite[PageCount];
         private bool _pageSelectorSelected;
+        private SelectorOrigin _selectorOrigin;
+        private int _selectorPassthroughFrame = -1;
+        private string _selectorPassthroughEvent = string.Empty;
+        private Vector3 _pageSelectorNormalScale = Vector3.one;
+        private int _pageSelectorNormalSortingOrder;
         private Slot _lastGridSlot;
         private GameObject _lastEquipmentTarget;
         private SpriteRenderer _nativeIconRendererTemplate;
         private float _nextSelectorCursorRefresh;
+        private TextMesh _pageSelectorLabel;
+        private int _lastDirectSubmitFrame = -1;
+        private bool _directInputAnnounced;
 
         private string _originalName = string.Empty;
         private string _originalDescription = string.Empty;
@@ -177,6 +197,7 @@ namespace CharmsEvolve.UI
             patched += PatchOneArgumentEventMethods(harmony, fsm, "Event", prefix);
 
             Plugin.Log.LogInfo("Patched native charm-navigation event entry points: " + patched);
+            Plugin.Log.LogInfo("Direct charm-page controls enabled: Q/PageUp=previous, E/PageDown=next, 1-4=page, right-stick left/right=page, game MenuSubmit=custom equip.");
         }
 
         public void Tick()
@@ -202,6 +223,7 @@ namespace CharmsEvolve.UI
                 return;
             }
 
+            PollDirectPageInput();
             UpdateSpecialFormHold();
 
             // Unity 5 could shift the selector by +100 Y. Unity 6 uses a different
@@ -210,16 +232,10 @@ namespace CharmsEvolve.UI
                 (_pageSelector.transform.position - _resolvedPageSelectorPosition).sqrMagnitude > 0.0001f)
                 _pageSelector.transform.position = _resolvedPageSelectorPosition;
 
-            // Unity 6's Idle Equipped state can rewrite the Update Cursor "Item" variable
-            // after a foreign selectable object is chosen. While the selector owns focus,
-            // gently reassert it instead of letting the native FSM silently snap away.
-            if (_pageSelectorSelected && _pageSelector != null &&
-                Time.unscaledTime >= _nextSelectorCursorRefresh &&
-                !IsPageSelectorObject(GetSelectedObject()))
-            {
-                _nextSelectorCursorRefresh = Time.unscaledTime + 0.08f;
-                SetCursorItem(_pageSelector);
-            }
+            // The selector owns a logical focus only.  The native cursor remains on the
+            // last real equipment/grid item, while the selector itself brightens and
+            // enlarges to show focus.  Never point Update Cursor at this foreign object.
+            UpdatePageSelectorSelectionVisual();
 
             // Do not reset the selected charm page when the player visits the inventory's
             // equipment or journal panes. Keeping it makes the page feel integrated with the
@@ -268,6 +284,72 @@ namespace CharmsEvolve.UI
             _slots.Clear();
             _slotByOriginalId.Clear();
             ResetBuildObjectsOnly();
+        }
+
+        private void PollDirectPageInput()
+        {
+            if (!_built || _gridRoot == null || !_gridRoot.activeInHierarchy || _transitioning)
+                return;
+
+            bool previous = Input.GetKeyDown(KeyCode.Q) || Input.GetKeyDown(KeyCode.PageUp);
+            bool next = Input.GetKeyDown(KeyCode.E) || Input.GetKeyDown(KeyCode.PageDown);
+            int requestedPage = -1;
+
+            if (Input.GetKeyDown(KeyCode.Alpha1) || Input.GetKeyDown(KeyCode.Keypad1))
+                requestedPage = 0;
+            else if (Input.GetKeyDown(KeyCode.Alpha2) || Input.GetKeyDown(KeyCode.Keypad2))
+                requestedPage = 1;
+            else if (Input.GetKeyDown(KeyCode.Alpha3) || Input.GetKeyDown(KeyCode.Keypad3))
+                requestedPage = 2;
+            else if (Input.GetKeyDown(KeyCode.Alpha4) || Input.GetKeyDown(KeyCode.Keypad4))
+                requestedPage = 3;
+
+            HeroActions actions = null;
+            InputHandler handler = InputHandler.Instance;
+            if (handler != null)
+                actions = handler.inputActions;
+
+            if (actions != null)
+            {
+                if (actions.rs_left != null && actions.rs_left.WasPressed)
+                    previous = true;
+                if (actions.rs_right != null && actions.rs_right.WasPressed)
+                    next = true;
+            }
+
+            if (requestedPage >= 0)
+            {
+                RequestPage(requestedPage);
+                AnnounceDirectInput();
+            }
+            else if (previous != next)
+            {
+                RequestPage(previous ? _page - 1 : _page + 1);
+                AnnounceDirectInput();
+            }
+
+            if (_page <= 0 || actions == null || actions.menuSubmit == null ||
+                !actions.menuSubmit.WasPressed || _lastDirectSubmitFrame == Time.frameCount)
+                return;
+
+            Slot selected = GetSelectedSlot();
+            if (selected == null)
+                return;
+
+            _lastDirectSubmitFrame = Time.frameCount;
+            if (IsSpecialFormSlot(selected))
+                BeginSpecialFormHold(selected);
+            else
+                ConfirmSelected(selected);
+            AnnounceDirectInput();
+        }
+
+        private void AnnounceDirectInput()
+        {
+            if (_directInputAnnounced)
+                return;
+            _directInputAnnounced = true;
+            Plugin.Log.LogInfo("Direct charm-page input path is active; no native cursor object is replaced.");
         }
 
         private static int PatchOneArgumentEventMethods(
@@ -325,9 +407,15 @@ namespace CharmsEvolve.UI
         {
             if (!_built || _pane == null || _gridRoot == null || !_gridRoot.activeInHierarchy)
                 return false;
-            if (!CharmUtil.IsUiCharmsOwner(eventOwner))
-                return false;
             if (string.IsNullOrEmpty(eventName))
+                return false;
+
+            // UP/DOWN can deliberately be passed back to the native FSM after leaving
+            // selector focus.  Both PlayMakerFSM.SendEvent and Fsm.Event are patched, so
+            // the duplicate call in the same frame must also pass through instead of
+            // immediately selecting the pager again.
+            if (_selectorPassthroughFrame == Time.frameCount &&
+                string.Equals(_selectorPassthroughEvent, eventName, StringComparison.Ordinal))
                 return false;
 
             // One input can pass through both PlayMakerFSM.SendEvent and Fsm.Event.
@@ -343,21 +431,34 @@ namespace CharmsEvolve.UI
                  eventName.IndexOf("DOWN", StringComparison.Ordinal) >= 0))
                 CancelSpecialFormHold(false);
 
-            GameObject eventOwnerObject = CharmUtil.GetOwnerGameObject(eventOwner);
-            GameObject selectedObject = GetSelectedObject();
-            bool onSelector = _pageSelectorSelected ||
-                              IsPageSelectorObject(selectedObject) ||
-                              IsPageSelectorObject(eventOwnerObject);
-            if (onSelector)
-                _pageSelectorSelected = true;
-            Slot selected = GetSelectedSlot();
-            if (selected == null)
-                selected = GetSlotFromEventOwner(eventOwner);
-            if (selected != null)
-                _lastGridSlot = selected;
-            string stateName = CharmUtil.GetActiveStateName(_uiCharmsFsm ?? eventOwner);
+            // The custom pages reuse the original 40 selectable roots.  Native UI Charms
+            // must not also equip the corresponding vanilla charm when MenuSubmit is
+            // pressed.  Handle this before owner filtering because Unity 6 can emit the
+            // submit event from a child FSM rather than UI Charms itself.
+            if (_page > 0 && IsEvent(eventName, "UI CONFIRM"))
+            {
+                Slot submitSlot = GetSelectedSlot() ?? GetSlotFromEventOwner(eventOwner);
+                if (submitSlot != null)
+                {
+                    MarkConsumed(eventName);
+                    if (_lastDirectSubmitFrame != Time.frameCount)
+                    {
+                        _lastDirectSubmitFrame = Time.frameCount;
+                        if (IsSpecialFormSlot(submitSlot))
+                            BeginSpecialFormHold(submitSlot);
+                        else
+                            ConfirmSelected(submitSlot);
+                    }
+                    AnnounceDirectInput();
+                    return true;
+                }
+            }
 
-            if (onSelector)
+            // Handle selector focus before filtering the event owner.  In Unity 6 the
+            // navigation event may originate from an input/collection FSM rather than
+            // UI Charms itself.  The previous owner filter let LEFT/RIGHT escape into
+            // the vanilla equip logic, which explains the unexpected charm toggles.
+            if (_pageSelectorSelected && IsSelectorNavigationEvent(eventName))
             {
                 if (IsEvent(eventName, "UI LEFT"))
                 {
@@ -373,37 +474,62 @@ namespace CharmsEvolve.UI
                     return true;
                 }
 
+                if (IsEvent(eventName, "UI CONFIRM"))
+                {
+                    // Confirm must never leak into the equipment state while the page
+                    // selector is focused.  Page changes are LEFT/RIGHT only.
+                    MarkConsumed(eventName);
+                    return true;
+                }
+
                 if (IsEvent(eventName, "UI UP") || IsEvent(eventName, "UI RS UP"))
                 {
+                    bool passToNative = _selectorOrigin == SelectorOrigin.Grid;
+                    ExitPageSelectorFocus();
+                    if (passToNative)
+                    {
+                        MarkSelectorPassthrough(eventName);
+                        return false;
+                    }
+
                     MarkConsumed(eventName);
-                    LeaveSelectorToEquipment();
                     return true;
                 }
 
                 if (IsEvent(eventName, "UI DOWN") || IsEvent(eventName, "UI RS DOWN"))
                 {
-                    MarkConsumed(eventName);
-                    LeaveSelectorToGrid();
-                    return true;
-                }
+                    bool passToNative = _selectorOrigin == SelectorOrigin.Equipment;
+                    ExitPageSelectorFocus();
+                    if (passToNative)
+                    {
+                        MarkSelectorPassthrough(eventName);
+                        return false;
+                    }
 
-                // Confirm is deliberately not a page switch. Left/right are the only page
-                // controls, matching the requested CharmPreset-style navigation.
-                if (IsEvent(eventName, "UI CONFIRM"))
-                {
                     MarkConsumed(eventName);
                     return true;
                 }
             }
 
-            // Match CharmPreset's vertical bridge. From the collection's top row, UP
-            // enters the page selector. From the equipped strip, DOWN enters it only
-            // when the cursor has reached the right-most equipped charm.
+            if (!CharmUtil.IsUiCharmsOwner(eventOwner))
+                return false;
+
+            GameObject selectedObject = GetSelectedObject();
+            Slot selected = GetSelectedSlot();
+            if (selected == null)
+                selected = GetSlotFromEventOwner(eventOwner);
+            if (selected != null)
+                _lastGridSlot = selected;
+            string stateName = CharmUtil.GetActiveStateName(_uiCharmsFsm ?? eventOwner);
+
+            // Match CharmPreset's vertical bridge without adding version-specific
+            // PlayMaker states.  Focus is logical: the native cursor stays on the real
+            // item it came from, and the page button supplies its own highlight.
             if (selected != null && selected.Row == 0 &&
                 (IsEvent(eventName, "UI UP") || IsEvent(eventName, "UI RS UP")))
             {
                 MarkConsumed(eventName);
-                SelectPageSelector(selected);
+                SelectPageSelector(selected, SelectorOrigin.Grid);
                 return true;
             }
 
@@ -416,7 +542,7 @@ namespace CharmsEvolve.UI
                 _lastEquipmentTarget = ResolveEquipmentSelectable(selectedObject) ??
                                        FindRightmostEquipmentTarget();
                 MarkConsumed(eventName);
-                SelectPageSelector(_lastGridSlot);
+                SelectPageSelector(_lastGridSlot, SelectorOrigin.Equipment);
                 return true;
             }
 
@@ -434,6 +560,23 @@ namespace CharmsEvolve.UI
             }
 
             return false;
+        }
+
+        private static bool IsSelectorNavigationEvent(string eventName)
+        {
+            return IsEvent(eventName, "UI LEFT") ||
+                   IsEvent(eventName, "UI RIGHT") ||
+                   IsEvent(eventName, "UI UP") ||
+                   IsEvent(eventName, "UI DOWN") ||
+                   IsEvent(eventName, "UI RS UP") ||
+                   IsEvent(eventName, "UI RS DOWN") ||
+                   IsEvent(eventName, "UI CONFIRM");
+        }
+
+        private void MarkSelectorPassthrough(string eventName)
+        {
+            _selectorPassthroughFrame = Time.frameCount;
+            _selectorPassthroughEvent = eventName ?? string.Empty;
         }
 
         private static bool IsEvent(string actual, string expected)
@@ -455,12 +598,6 @@ namespace CharmsEvolve.UI
 
         private bool IsPageSelectorSelected()
         {
-            if (_pageSelectorSelected)
-                return true;
-
-            GameObject selected = GetSelectedObject();
-            if (IsPageSelectorObject(selected))
-                _pageSelectorSelected = true;
             return _pageSelectorSelected;
         }
 
@@ -473,7 +610,7 @@ namespace CharmsEvolve.UI
                    _pageSelector.transform.IsChildOf(candidate.transform);
         }
 
-        private void SelectPageSelector(Slot fromSlot)
+        private void SelectPageSelector(Slot fromSlot, SelectorOrigin origin)
         {
             if (_pageSelector == null)
                 return;
@@ -481,22 +618,26 @@ namespace CharmsEvolve.UI
             if (fromSlot != null)
                 _lastGridSlot = fromSlot;
 
+            _selectorOrigin = origin;
             _pageSelectorSelected = true;
             _nextSelectorCursorRefresh = 0f;
-            SetCursorItem(_pageSelector);
+            UpdatePageSelectorSelectionVisual();
+            Plugin.Log.LogDebug("Charm page selector focus entered from " + origin + ".");
+        }
+
+        private void ExitPageSelectorFocus()
+        {
+            _pageSelectorSelected = false;
+            _selectorOrigin = SelectorOrigin.None;
+            UpdatePageSelectorSelectionVisual();
         }
 
         private void LeaveSelectorToGrid()
         {
-            _pageSelectorSelected = false;
-
-            // Unity 6 no longer exposes CharmPreset's old "Idle Collection" state.
-            // Enter the closest known collection state when available, then explicitly
-            // set the cursor item so the transition does not depend on cloned FSM actions.
-            CharmUtil.TrySetFsmState(_uiCharmsFsm, "Charm");
-            Slot fallback = FindGridEntryBelowSelector();
-            if (fallback == null)
-                fallback = _lastGridSlot;
+            // Kept for compatibility with older call sites.  The v5 navigation path
+            // normally exits focus and lets the native DOWN event perform this move.
+            ExitPageSelectorFocus();
+            Slot fallback = FindGridEntryBelowSelector() ?? _lastGridSlot;
             if (fallback == null && _slots.Count > 0)
                 fallback = _slots[0];
             if (fallback != null)
@@ -508,19 +649,9 @@ namespace CharmsEvolve.UI
 
         private void LeaveSelectorToEquipment()
         {
-            _pageSelectorSelected = false;
-
-            CharmUtil.TrySetFsmState(_uiCharmsFsm, "Idle Equipped");
-            GameObject fallback = _lastEquipmentTarget;
-            if (fallback == null || !fallback.activeInHierarchy)
-                fallback = FindRightmostEquipmentTarget();
-            if (fallback != null)
-            {
-                _lastEquipmentTarget = fallback;
-                SetCursorItem(fallback);
-            }
-            else if (_lastGridSlot != null)
-                SetCursorItem(_lastGridSlot.Root);
+            // Kept for compatibility with older call sites.  Selector focus normally
+            // leaves the native cursor untouched because it is already on equipment.
+            ExitPageSelectorFocus();
         }
 
         private void SetCursorItem(GameObject item)
@@ -739,14 +870,48 @@ namespace CharmsEvolve.UI
 
         private void RequestPage(int page)
         {
-            CancelSpecialFormHold(false);
             page = ((page % PageCount) + PageCount) % PageCount;
-            if (page == _page || _transitioning)
+            if (page == _page)
                 return;
 
-            if (_pageTransition != null)
+            // Page switching now mirrors the simple, robust part of CharmPreset: the
+            // surrounding inventory stays still and only the 40 collection visuals and
+            // their data binding are replaced immediately.  The equipped strip is never
+            // rebuilt, so original/X/Y/Z copies can remain equipped independently.
+            if (_pageTransition != null && _plugin != null)
+            {
                 _plugin.StopCoroutine(_pageTransition);
-            _pageTransition = _plugin.StartCoroutine(PageTransition(page));
+                _pageTransition = null;
+            }
+            _transitioning = false;
+            _status = string.Empty;
+            _statusUntil = 0f;
+
+            if (_page == 0 && page > 0)
+            {
+                CaptureNativeGrid();
+                CaptureNativeDetails();
+            }
+
+            TryInvokeNativeAudioAction("Tween Up", 1);
+            _page = page;
+            UpdatePageSelectorSprite();
+
+            if (_page == 0)
+            {
+                RestoreVanillaVisuals();
+                RestoreNativeDetails();
+            }
+            else
+            {
+                ApplyPageVisuals();
+                Slot selected = _lastGridSlot ?? GetSelectedSlot();
+                if (selected != null)
+                    UpdateDetails(selected);
+            }
+
+            UpdatePageSelectorSelectionVisual();
+            Plugin.Log.LogInfo("Charm collection page changed immediately to " + (_page + 1) + "/" + PageCount + ".");
         }
 
         private IEnumerator PageTransition(int targetPage)
@@ -1789,9 +1954,10 @@ namespace CharmsEvolve.UI
                 !IsInventoryCharmSpriteName(_nativeIconRendererTemplate.sprite.name) ||
                 renderer == _nativeIconRendererTemplate)
             {
-                // A null material resets SpriteRenderer to Unity's normal sprite
-                // material.  This is safer than copying the divider/effect material.
-                renderer.sharedMaterial = null;
+                // Unity 6 renders a SpriteRenderer with a synthesized/null material as
+                // the magenta error square on this build.  Keep a proven native sprite
+                // material even when the preferred Tweener Charm template is absent.
+                renderer.sharedMaterial = ResolveNativePageSelectorMaterial();
                 renderer.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off;
                 renderer.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off;
                 return;
@@ -2028,17 +2194,15 @@ namespace CharmsEvolve.UI
                 _pageSelector = existing.gameObject;
             else
             {
-                // Match CharmPreset: a plain HUD object containing one SpriteRenderer
-                // and one BoxCollider2D, rather than cloning the tiny native Next Dot.
-                _pageSelector = new GameObject("CharmsEvolve Page Selector");
-                _pageSelector.transform.SetParent(_pane.transform, true);
-                Plugin.Log.LogInfo("Created CharmPreset-style charm page selector.");
+                _pageSelector = CreateNativePageSelectorObject();
+                Plugin.Log.LogInfo("Created native-cloned charm page indicator.");
             }
 
             _pageSelector.SetActive(true);
             _pageSelector.layer = ResolveUiLayer();
             _pageSelector.transform.position = _resolvedPageSelectorPosition;
             _pageSelector.transform.localScale = Vector3.one;
+            _pageSelectorNormalScale = _pageSelector.transform.localScale;
             AttachPageSelectorPositionConstraint();
 
             SpriteRenderer[] renderers = _pageSelector.GetComponentsInChildren<SpriteRenderer>(true);
@@ -2104,11 +2268,16 @@ namespace CharmsEvolve.UI
             _pageSelectorRenderer.sortingLayerID = 629535577;
             _pageSelectorRenderer.sortingLayerName = "HUD";
             _pageSelectorRenderer.sortingOrder = GetHighestHudSortingOrder() + 10;
+            _pageSelectorNormalSortingOrder = _pageSelectorRenderer.sortingOrder;
             _pageSelectorRenderer.gameObject.layer = ResolveUiLayer();
-            _pageSelectorRenderer.sharedMaterial = null;
+            // A null material produced Unity's magenta error square in this Unity 6
+            // build.  Reuse the exact working material from Tweener Charm / a native
+            // collection SpriteRenderer instead of asking Unity to synthesize one.
+            _pageSelectorRenderer.sharedMaterial = ResolveNativePageSelectorMaterial();
             _pageSelectorRenderer.color = Color.white;
             _pageSelectorRenderer.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off;
             _pageSelectorRenderer.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off;
+            BuildPageSelectorLabel();
             UpdatePageSelectorSprite();
 
             Plugin.Log.LogInfo(
@@ -2118,7 +2287,118 @@ namespace CharmsEvolve.UI
                 ", local=" + _pageSelector.transform.localPosition +
                 ", sorting=" + _pageSelectorRenderer.sortingLayerName + "/" +
                 _pageSelectorRenderer.sortingOrder +
+                ", material=" + (_pageSelectorRenderer.sharedMaterial == null ? "<none>" : _pageSelectorRenderer.sharedMaterial.name) +
+                ", shader=" + (_pageSelectorRenderer.sharedMaterial == null || _pageSelectorRenderer.sharedMaterial.shader == null
+                    ? "<none>" : _pageSelectorRenderer.sharedMaterial.shader.name) +
                 ", collider=" + (_pageSelectorCollider == null ? "<none>" : _pageSelectorCollider.GetType().Name) + ".");
+        }
+
+        private GameObject CreateNativePageSelectorObject()
+        {
+            GameObject result = null;
+            if (_nativeIconRendererTemplate != null && _nativeIconRendererTemplate.gameObject != null)
+            {
+                result = UnityEngine.Object.Instantiate(_nativeIconRendererTemplate.gameObject);
+                result.name = "CharmsEvolve Page Selector";
+                result.transform.SetParent(_pane.transform, true);
+
+                // The clone is visual only.  Disable any copied scripts/colliders while
+                // retaining the exact native renderer/material/atlas binding that Unity 6
+                // already renders correctly.
+                Component[] components = result.GetComponents<Component>();
+                for (int i = 0; i < components.Length; i++)
+                {
+                    Behaviour behaviour = components[i] as Behaviour;
+                    if (behaviour != null)
+                        behaviour.enabled = false;
+                }
+                SpriteRenderer[] childRenderers = result.GetComponentsInChildren<SpriteRenderer>(true);
+                SpriteRenderer rootRenderer = result.GetComponent<SpriteRenderer>();
+                for (int i = 0; i < childRenderers.Length; i++)
+                {
+                    if (childRenderers[i] != null && childRenderers[i] != rootRenderer)
+                        childRenderers[i].enabled = false;
+                }
+            }
+
+            if (result == null)
+            {
+                result = new GameObject("CharmsEvolve Page Selector");
+                result.transform.SetParent(_pane.transform, true);
+            }
+            return result;
+        }
+
+        private void BuildPageSelectorLabel()
+        {
+            if (_pageSelector == null)
+                return;
+
+            Transform existing = _pageSelector.transform.Find("Page Label");
+            GameObject labelObject;
+            if (existing != null)
+                labelObject = existing.gameObject;
+            else
+            {
+                labelObject = new GameObject("Page Label");
+                labelObject.transform.SetParent(_pageSelector.transform, false);
+            }
+
+            labelObject.transform.localPosition = new Vector3(0f, -0.78f, -0.02f);
+            labelObject.transform.localRotation = Quaternion.identity;
+            labelObject.transform.localScale = Vector3.one;
+            _pageSelectorLabel = labelObject.GetComponent<TextMesh>();
+            if (_pageSelectorLabel == null)
+                _pageSelectorLabel = labelObject.AddComponent<TextMesh>();
+            _pageSelectorLabel.anchor = TextAnchor.MiddleCenter;
+            _pageSelectorLabel.alignment = TextAlignment.Center;
+            _pageSelectorLabel.fontSize = 48;
+            _pageSelectorLabel.characterSize = 0.045f;
+            _pageSelectorLabel.color = Color.white;
+
+            MeshRenderer renderer = labelObject.GetComponent<MeshRenderer>();
+            if (renderer != null)
+            {
+                renderer.sortingLayerID = 629535577;
+                renderer.sortingLayerName = "HUD";
+                renderer.sortingOrder = _pageSelectorNormalSortingOrder + 11;
+            }
+        }
+
+        private Material ResolveNativePageSelectorMaterial()
+        {
+            if (_nativeIconRendererTemplate != null &&
+                _nativeIconRendererTemplate.sharedMaterial != null)
+                return _nativeIconRendererTemplate.sharedMaterial;
+
+            for (int i = 0; i < _slots.Count; i++)
+            {
+                Slot slot = _slots[i];
+                if (slot != null && slot.Icon != null && slot.Icon.sharedMaterial != null)
+                    return slot.Icon.sharedMaterial;
+            }
+
+            Shader spriteShader = Shader.Find("Sprites/Default");
+            return spriteShader == null ? null : new Material(spriteShader);
+        }
+
+        private void UpdatePageSelectorSelectionVisual()
+        {
+            if (_pageSelector == null || _pageSelectorRenderer == null)
+                return;
+
+            if (_pageSelectorSelected)
+            {
+                _pageSelector.transform.localScale = _pageSelectorNormalScale * 1.16f;
+                _pageSelectorRenderer.color = Color.white;
+                _pageSelectorRenderer.sortingOrder = _pageSelectorNormalSortingOrder + 10;
+            }
+            else
+            {
+                _pageSelector.transform.localScale = _pageSelectorNormalScale;
+                _pageSelectorRenderer.color = new Color(0.92f, 0.92f, 0.92f, 1f);
+                _pageSelectorRenderer.sortingOrder = _pageSelectorNormalSortingOrder;
+            }
         }
 
         private void AttachPageSelectorPositionConstraint()
@@ -2333,8 +2613,13 @@ namespace CharmsEvolve.UI
                 _pageSelector.transform.position = PageSelectorPosition;
             }
             _pageSelectorRenderer.sprite = sprite;
+            Material nativeMaterial = ResolveNativePageSelectorMaterial();
+            if (nativeMaterial != null)
+                _pageSelectorRenderer.sharedMaterial = nativeMaterial;
             _pageSelectorRenderer.enabled = sprite != null;
-            _pageSelectorRenderer.color = Color.white;
+            if (_pageSelectorLabel != null)
+                _pageSelectorLabel.text = "Q  " + (_page + 1) + "/" + PageCount + "  E";
+            UpdatePageSelectorSelectionVisual();
         }
 
         private bool TryResolveCharmVisualSprite(string key, int originalId, Slot slot, out Sprite sprite)
@@ -3383,6 +3668,12 @@ namespace CharmsEvolve.UI
             _pageSelectorRenderer = null;
             _pageSelectorCollider = null;
             _pageSelectorSelected = false;
+            _selectorOrigin = SelectorOrigin.None;
+            _selectorPassthroughFrame = -1;
+            _selectorPassthroughEvent = string.Empty;
+            _pageSelectorLabel = null;
+            _lastDirectSubmitFrame = -1;
+            _directInputAnnounced = false;
             _lastGridSlot = null;
             _lastEquipmentTarget = null;
             _nativeIconRendererTemplate = null;
