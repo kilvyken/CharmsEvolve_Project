@@ -867,7 +867,7 @@ namespace CharmsEvolve.UI
                         continue;
 
                     int id;
-                    if (!int.TryParse(transform.gameObject.name, out id) || id < 1 || id > 40)
+                    if (!TryResolveSlotId(transform.gameObject, out id) || id < 1 || id > 40)
                         continue;
                     if (!IsLiveCollectionRoot(transform.gameObject))
                         continue;
@@ -1115,6 +1115,45 @@ namespace CharmsEvolve.UI
             return match.Success && int.TryParse(match.Groups[1].Value, out id);
         }
 
+        private static bool TryResolveSlotId(GameObject candidate, out int id)
+        {
+            id = 0;
+            if (candidate == null)
+                return false;
+
+            if (int.TryParse(candidate.name, out id) && id >= 1 && id <= 40)
+                return true;
+
+            Component charmItem = FindDirectComponentByTypeName(candidate, "CharmItem");
+            if (charmItem != null && CharmUtil.TryGetCharmItemId(charmItem, out id) && id >= 1 && id <= 40)
+                return true;
+
+            string name = candidate.name ?? string.Empty;
+            bool directCollectionChild = candidate.transform.parent != null &&
+                string.Equals(candidate.transform.parent.gameObject.name, "Collected Charms", StringComparison.OrdinalIgnoreCase);
+            bool slotNamed = directCollectionChild ||
+                name.IndexOf("charm", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("slot", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("item", StringComparison.OrdinalIgnoreCase) >= 0;
+
+            if (slotNamed)
+            {
+                MatchCollection matches = Regex.Matches(name, @"(?<!\d)0*(40|[1-3]\d|[1-9])(?!\d)");
+                for (int i = 0; i < matches.Count; i++)
+                {
+                    if (int.TryParse(matches[i].Groups[1].Value, out id) && id >= 1 && id <= 40)
+                        return true;
+                }
+            }
+
+            SpriteRenderer renderer = candidate.GetComponent<SpriteRenderer>();
+            if (renderer != null && renderer.sprite != null &&
+                TryParseCharmSpriteId(renderer.sprite.name, out id) && id >= 1 && id <= 40)
+                return true;
+
+            return false;
+        }
+
         private static GameObject FindSelectableRoot(GameObject icon, Transform pane)
         {
             Transform current = icon.transform;
@@ -1159,10 +1198,12 @@ namespace CharmsEvolve.UI
                         (item.gameObject == _gridRoot || item.transform.IsChildOf(_gridRoot.transform)))
                         collectionCount++;
 
-                    if (samples.Count < 12)
+                    if (samples.Count < 20)
                     {
                         SpriteRenderer renderer = ResolveCharmItemIcon(item.gameObject, item);
                         samples.Add(id + "@" + CharmUtil.GetHierarchyPath(item.gameObject) +
+                            " scene=" + CharmUtil.IsLiveSceneObject(item.gameObject) +
+                            " active=" + item.gameObject.activeInHierarchy +
                             " sprite=" + (renderer == null || renderer.sprite == null ? "<none>" : renderer.sprite.name));
                     }
                 }
@@ -1175,13 +1216,55 @@ namespace CharmsEvolve.UI
                     missing.Add(id);
             }
 
+            int descendantCount = 0;
+            int directChildCount = 0;
+            HashSet<int> namedIds = new HashSet<int>();
+            List<string> directChildren = new List<string>();
+            if (_gridRoot != null)
+            {
+                Transform root = _gridRoot.transform;
+                directChildCount = root.childCount;
+                Transform[] transforms = _gridRoot.GetComponentsInChildren<Transform>(true);
+                descendantCount = transforms.Length;
+                for (int i = 0; i < transforms.Length; i++)
+                {
+                    Transform transform = transforms[i];
+                    int id;
+                    if (transform != null && TryResolveSlotId(transform.gameObject, out id) && id >= 1 && id <= 40)
+                        namedIds.Add(id);
+                }
+
+                for (int i = 0; i < root.childCount && directChildren.Count < 50; i++)
+                {
+                    Transform child = root.GetChild(i);
+                    if (child == null)
+                        continue;
+                    int id;
+                    bool hasId = TryResolveSlotId(child.gameObject, out id);
+                    directChildren.Add(child.gameObject.name +
+                        (hasId ? "=>" + id : "") +
+                        "[active=" + child.gameObject.activeInHierarchy +
+                        ",children=" + child.childCount + "]");
+                }
+            }
+
+            Plugin.Log.LogInfo(
+                "Charm grid probe: grid=" + CharmUtil.GetHierarchyPath(_gridRoot) +
+                ", pane=" + CharmUtil.GetHierarchyPath(_pane) +
+                ", directChildren=" + directChildCount +
+                ", descendants=" + descendantCount +
+                ", recognizableIds=" + namedIds.Count +
+                (namedIds.Count == 0 ? "" : " [" + string.Join(",", new List<int>(namedIds).ConvertAll(delegate(int value) { return value.ToString(); }).ToArray()) + "]") + ".");
+            if (directChildren.Count > 0)
+                Plugin.Log.LogInfo("Charm grid direct children: " + string.Join(" | ", directChildren.ToArray()));
+
             Plugin.Log.LogInfo(
                 "CharmItem probe: resources=" + items.Length +
                 ", under selected Charms root=" + collectionCount +
                 ", resolved slots=" + _slots.Count +
                 ", missing=" + (missing.Count == 0 ? "<none>" : string.Join(",", missing.ConvertAll(delegate(int value) { return value.ToString(); }).ToArray())) + ".");
             for (int i = 0; i < samples.Count; i++)
-                Plugin.Log.LogDebug("CharmItem sample: " + samples[i]);
+                Plugin.Log.LogInfo("CharmItem sample: " + samples[i]);
 
             LogNativeFeedbackDiagnostics();
         }

@@ -489,20 +489,34 @@ namespace CharmsEvolve.Interop
         private static void EnsureResolved()
         {
             bool paneAlive = _charmsPane != null;
-            bool gridAlive = _charmsGrid != null;
-            if (paneAlive && gridAlive && _uiCharmsFsm != null)
+            bool gridUsable = IsLikelyCollectionGrid(_charmsGrid);
+            if (paneAlive && gridUsable && _uiCharmsFsm != null)
                 return;
             if (Time.unscaledTime < _nextProbeAt)
                 return;
 
             _nextProbeAt = Time.unscaledTime + 0.75f;
-            ResolveFromCharmItems();
+
+            // The UI Charms FSM is the most stable Unity 6 anchor. Resolve it first,
+            // then let CharmItem discovery fill gaps instead of allowing a small live
+            // CharmItem subset to permanently cache the wrong ancestor.
             ResolveLegacyUiCharms();
+            ResolveFromCharmItems();
 
             if (_charmsGrid != null && _charmsPane == null)
                 _charmsPane = FindPaneFromGrid(_charmsGrid);
             if (_charmsPane == null && _charmsGrid != null)
                 _charmsPane = _charmsGrid;
+
+            if (_charmsPane != null)
+            {
+                Transform collected = FindNamedDescendant(_charmsPane.transform, "Collected Charms", 10);
+                if (collected != null &&
+                    (string.Equals(collected.gameObject.name, "Collected Charms", StringComparison.OrdinalIgnoreCase) ||
+                     ScoreCollectionGrid(collected.gameObject) > ScoreCollectionGrid(_charmsGrid)))
+                    _charmsGrid = collected.gameObject;
+            }
+
             if (_charmsGrid == null && _charmsPane != null)
             {
                 Transform grid = FindNamedDescendant(_charmsPane.transform, "Charms", 8);
@@ -571,13 +585,15 @@ namespace CharmsEvolve.Interop
             if (best == null)
                 return;
 
-            _charmsGrid = best.gameObject;
-            _charmsPane = FindPaneFromGrid(_charmsGrid);
+            if (_charmsGrid == null || ScoreCollectionGrid(best.gameObject) > ScoreCollectionGrid(_charmsGrid))
+                _charmsGrid = best.gameObject;
+            if (_charmsGrid != null)
+                _charmsPane = FindPaneFromGrid(_charmsGrid);
         }
 
         private static void ResolveLegacyUiCharms()
         {
-            if (_uiCharmsFsm != null && _charmsPane != null)
+            if (_uiCharmsFsm != null && _charmsPane != null && IsLikelyCollectionGrid(_charmsGrid))
                 return;
 
             Type playMakerFsmType = AccessTools.TypeByName("PlayMakerFSM");
@@ -597,7 +613,9 @@ namespace CharmsEvolve.Interop
                 int score = IsLiveSceneObject(component.gameObject) ? 1000 : 0;
                 if (component.gameObject.activeInHierarchy)
                     score += 100;
-                if (FindNamedDescendant(component.transform, "Charms", 8) != null)
+                if (FindNamedDescendant(component.transform, "Collected Charms", 10) != null)
+                    score += 200;
+                else if (FindNamedDescendant(component.transform, "Charms", 8) != null)
                     score += 50;
                 if (score > bestScore)
                 {
@@ -611,11 +629,12 @@ namespace CharmsEvolve.Interop
                 _uiCharmsFsm = best;
                 if (_charmsPane == null)
                     _charmsPane = best.gameObject;
-                if (_charmsGrid == null)
-                {
-                    Transform grid = FindNamedDescendant(best.transform, "Charms", 8);
-                    _charmsGrid = grid == null ? best.gameObject : grid.gameObject;
-                }
+                Transform grid = FindNamedDescendant(best.transform, "Collected Charms", 10);
+                if (grid == null)
+                    grid = FindNamedDescendant(best.transform, "Charms", 8);
+                GameObject candidate = grid == null ? best.gameObject : grid.gameObject;
+                if (_charmsGrid == null || ScoreCollectionGrid(candidate) >= ScoreCollectionGrid(_charmsGrid))
+                    _charmsGrid = candidate;
             }
         }
 
@@ -676,15 +695,64 @@ namespace CharmsEvolve.Interop
         private static Transform FindCharmCollectionAncestor(Transform start)
         {
             Transform current = start;
+            Transform charmsFallback = null;
             for (int depth = 0; current != null && depth < 16; depth++, current = current.parent)
             {
                 string name = current.gameObject.name ?? string.Empty;
                 if (string.Equals(name, "Equipped Charms", StringComparison.OrdinalIgnoreCase))
                     return null;
-                if (string.Equals(name, "Charms", StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(name, "Collected Charms", StringComparison.OrdinalIgnoreCase))
                     return current;
+                if (charmsFallback == null && string.Equals(name, "Charms", StringComparison.OrdinalIgnoreCase))
+                    charmsFallback = current;
             }
-            return null;
+            return charmsFallback;
+        }
+
+        private static bool IsLikelyCollectionGrid(GameObject candidate)
+        {
+            if (candidate == null)
+                return false;
+            if (string.Equals(candidate.name, "Collected Charms", StringComparison.OrdinalIgnoreCase))
+                return true;
+            return ScoreCollectionGrid(candidate) >= 2000;
+        }
+
+        private static int ScoreCollectionGrid(GameObject candidate)
+        {
+            if (candidate == null)
+                return int.MinValue;
+
+            int score = 0;
+            string name = candidate.name ?? string.Empty;
+            if (string.Equals(name, "Collected Charms", StringComparison.OrdinalIgnoreCase))
+                score += 10000;
+            else if (string.Equals(name, "Charms", StringComparison.OrdinalIgnoreCase))
+                score += 100;
+
+            HashSet<int> ids = new HashSet<int>();
+            try
+            {
+                Transform[] transforms = candidate.GetComponentsInChildren<Transform>(true);
+                for (int i = 0; i < transforms.Length; i++)
+                {
+                    Transform transform = transforms[i];
+                    int id;
+                    if (transform != null && int.TryParse(transform.gameObject.name, out id) && id >= 1 && id <= 40)
+                        ids.Add(id);
+                }
+            }
+            catch
+            {
+                // A hierarchy may be destroyed while the inventory is transitioning.
+            }
+
+            score += ids.Count * 100;
+            if (IsLiveSceneObject(candidate))
+                score += 50;
+            if (candidate.activeInHierarchy)
+                score += 10;
+            return score;
         }
 
         private static GameObject FindPaneFromGrid(GameObject grid)
