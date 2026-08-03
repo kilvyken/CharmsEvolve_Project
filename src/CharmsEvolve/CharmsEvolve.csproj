@@ -1,0 +1,69 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>7.3</LangVersion>
+    <RootNamespace>CharmsEvolve</RootNamespace>
+    <AssemblyName>CharmsEvolve</AssemblyName>
+    <Version>0.1.0</Version>
+    <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+
+    <!--
+      使用方式：
+      dotnet build -c Release -p:HollowKnightDir="D:\Steam\steamapps\common\Hollow Knight"
+      也可以直接在此处写死 HollowKnightDir。
+    -->
+    <HollowKnightDir Condition="'$(HollowKnightDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Hollow Knight</HollowKnightDir>
+    <ManagedDir>$(HollowKnightDir)\hollow_knight_Data\Managed</ManagedDir>
+    <BepInExCoreDir>$(HollowKnightDir)\BepInEx\core</BepInExCoreDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="BepInEx">
+      <HintPath>$(BepInExCoreDir)\BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(BepInExCoreDir)\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="netstandard">
+      <HintPath>..\..\..\..\hollow_knight_Data\Managed\netstandard.dll</HintPath>
+    </Reference>
+
+    <Reference Include="UnityEngine">
+      <HintPath>$(ManagedDir)\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(ManagedDir)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>$(ManagedDir)\UnityEngine.IMGUIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.InputLegacyModule">
+      <HintPath>$(ManagedDir)\UnityEngine.InputLegacyModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.ImageConversionModule">
+      <HintPath>$(ManagedDir)\UnityEngine.ImageConversionModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>$(ManagedDir)\UnityEngine.TextRenderingModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.JSONSerializeModule">
+      <HintPath>$(ManagedDir)\UnityEngine.JSONSerializeModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <Target Name="CopyToBepInEx" AfterTargets="Build" Condition="'$(HollowKnightDir)' != 'CHANGE_ME'">
+    <MakeDir Directories="$(HollowKnightDir)\BepInEx\plugins\CharmsEvolve" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(HollowKnightDir)\BepInEx\plugins\CharmsEvolve" />
+  </Target>
+</Project>

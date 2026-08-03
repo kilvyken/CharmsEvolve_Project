@@ -1,0 +1,762 @@
+{
+  "source": "hollowKnight_CharmsEvolve.xlsx",
+  "baseCharms": [
+    {
+      "originalId": 1,
+      "nameZh": "聚集蜂群",
+      "nameEn": "Gathering Swarm",
+      "baseEffect": "掉落 Geo 自动飞向骑士",
+      "vanillaSynergy": "",
+      "vanillaCost": 1,
+      "copyCost": 1,
+      "enhancedSynergy": "蜜蜂和蜘蛛召唤物伤害+100%",
+      "voidKnight": "",
+      "legacyEnhancement": "任性的指南针：即时获得金钱",
+      "copyX": "蜜蜂和蜘蛛召唤物伤害+100%",
+      "copyY": "蜜蜂和蜘蛛召唤物伤害+100%",
+      "copyZ": "蜜蜂和蜘蛛召唤物伤害+100%",
+      "stackableSynergies": []
+    },
+    {
+      "originalId": 2,
+      "nameZh": "任性的指南针",
+      "nameEn": "Wayward Compass",
+      "baseEffect": "地图显示玩家位置",
+      "vanillaSynergy": "",
+      "vanillaCost": 1,
+      "copyCost": 1,
+      "enhancedSynergy": "减少大部分护符需要的槽位数量",
+      "voidKnight": "",
+      "legacyEnhancement": "1",
+      "copyX": "减少易碎仿制品护符槽位",
+      "copyY": "减少白王复制品护符槽位",
+      "copyZ": "减少梦境印刻物护符槽位",
+      "stackableSynergies": []
+    },
+    {
+      "originalId": 3,
+      "nameZh": "幼虫之歌",
+      "nameEn": "Grubsong",
+      "baseEffect": "受伤获得 15 灵魂",
+      "vanillaSynergy": "编织者之歌：织布者会在攻击敌人时为骑士提供灵魂（每次命中可获得3点灵魂），甚至还能从通常不会掉落灵魂的敌人身上收集灵魂",
+      "vanillaCost": 1,
+      "copyCost": 1,
+      "enhancedSynergy": "法术扭曲者：释放法术时受伤＋8灵魂",
+      "voidKnight": "",
+      "legacyEnhancement": "蜂巢之血：蜂巢之血再生期间受伤获得灵魂（阶段 1 得 5，阶段 2 得 10）；搭配蜕变挽歌额外 +5",
+      "copyX": "受伤获得 15 灵魂",
+      "copyY": "受伤获得 15 灵魂",
+      "copyZ": "受伤获得 15 灵魂",
+      "stackableSynergies": [
+        "编织者之歌：织布者会在攻击敌人时为骑士提供灵魂（每次命中可获得3点灵魂），甚至还能从通常不会掉落灵魂的敌人身上收集灵魂"
+      ]
+    },
+    {
+      "originalId": 4,
+      "nameZh": "坚硬外壳",
+      "nameEn": "Stalwart Shell",
+      "baseEffect": "受伤无敌时间 +0.5s",
+      "vanillaSynergy": "",
+      "vanillaCost": 2,
+      "copyCost": 1,
+      "enhancedSynergy": "2稳定之体+虚空之心：受到的所有2血伤害变为1血伤害",
+      "voidKnight": "",
+      "legacyEnhancement": "巴德尔之壳：（造成壳受损时）受伤后的无敌时间 +0.35 秒",
+      "copyX": "受伤无敌时间 +0.5s",
+      "copyY": "受伤无敌时间 +0.5s",
+      "copyZ": "受伤无敌时间 +0.5s",
+      "stackableSynergies": [
+        "巴德尔之壳：造成壳受损时无敌时间 +0.35 秒"
+      ]
+    },
+    {
+      "originalId": 5,
+      "nameZh": "巴德尔之壳",
+      "nameEn": "Baldur Shell",
+      "baseEffect": "专注时生成护盾，最多 4 次",
+      "vanillaSynergy": "",
+      "vanillaCost": 2,
+      "copyCost": 1,
+      "enhancedSynergy": "亡者之怒：完全破碎后，亡怒状态下击杀会修复壳",
+      "voidKnight": "",
+      "legacyEnhancement": "蜂巢之血：只要未受伤害，外壳会随时间恢复(4级外壳15秒，3级20秒，2级24秒，1级27秒）",
+      "copyX": "加多一个盾，再多抗4次",
+      "copyY": "加多一个盾，再多抗4次",
+      "copyZ": "加多一个盾，再多抗4次",
+      "stackableSynergies": [
+        "亡者之怒+Z：碎一个壳进入亡怒状态，加血扣血会中断",
+        "生命血核心+Y：碎1个壳后加4生命血",
+        "生命血之心+X：碎1个壳后加2生命血"
+      ]
+    },
+    {
+      "originalId": 6,
+      "nameZh": "亡者之怒",
+      "nameEn": "Fury of the Fallen",
+      "baseEffect": "生命 ≤1 时，钉子伤害 ×1.75",
+      "vanillaSynergy": "发光子宫/蜕变挽歌",
+      "vanillaCost": 2,
+      "copyCost": 1,
+      "enhancedSynergy": "27",
+      "voidKnight": "5//28Z",
+      "legacyEnhancement": "无忧旋律：王者之怒未激活时骨钉攻击有 1% 暴击几率（1.25 倍伤害）；每缺失 1 格面具，几率提升",
+      "copyX": "生命 ≤1 时，钉子伤害 +75%",
+      "copyY": "生命 ≤1 时，钉子伤害 +75%",
+      "copyZ": "生命 ≤1 时，钉子伤害 +75%",
+      "stackableSynergies": []
+    },
+    {
+      "originalId": 7,
+      "nameZh": "快速聚集",
+      "nameEn": "Quick Focus",
+      "baseEffect": "专注时间 -33%",
+      "vanillaSynergy": "",
+      "vanillaCost": 3,
+      "copyCost": 1,
+      "enhancedSynergy": "29+34",
+      "voidKnight": "",
+      "legacyEnhancement": "超冲cd-0.3s",
+      "copyX": "专注时间*(1-33%)",
+      "copyY": "专注时间*(1-33%)",
+      "copyZ": "专注时间*(1-33%)",
+      "stackableSynergies": [
+        "超冲cd-0.3s"
+      ]
+    },
+    {
+      "originalId": 8,
+      "nameZh": "生命血之心",
+      "nameEn": "Lifeblood Heart",
+      "baseEffect": "多2 生命血",
+      "vanillaSynergy": "",
+      "vanillaCost": 2,
+      "copyCost": 1,
+      "enhancedSynergy": "易碎生命：3生命血",
+      "voidKnight": "27",
+      "legacyEnhancement": "",
+      "copyX": "多2 生命血",
+      "copyY": "多2 生命血",
+      "copyZ": "多2 生命血",
+      "stackableSynergies": [
+        "易碎生命：3生命血",
+        "乔尼的祝福"
+      ]
+    },
+    {
+      "originalId": 9,
+      "nameZh": "生命血核心",
+      "nameEn": "Lifeblood Core",
+      "baseEffect": "多4 生命血",
+      "vanillaSynergy": "",
+      "vanillaCost": 3,
+      "copyCost": 2,
+      "enhancedSynergy": "易碎生命：7生命血",
+      "voidKnight": "27",
+      "legacyEnhancement": "",
+      "copyX": "多4 生命血",
+      "copyY": "多4 生命血",
+      "copyZ": "多4 生命血",
+      "stackableSynergies": [
+        "易碎生命：7生命血",
+        "乔尼的祝福"
+      ]
+    },
+    {
+      "originalId": 10,
+      "nameZh": "防御者纹章",
+      "nameEn": "Defender’s Crest",
+      "baseEffect": "持续毒云，约 1 伤害/帧区间",
+      "vanillaSynergy": "吸虫之巢/蘑菇孢子/22",
+      "vanillaCost": 1,
+      "copyCost": 1,
+      "enhancedSynergy": "吸虫之巢：毒气持续时间+50%",
+      "voidKnight": "",
+      "legacyEnhancement": "亡者之怒：在亡怒状态下增强防御者纹章的效果,毒云伤害 +2 且生成频率翻倍",
+      "copyX": "伤害＋100%",
+      "copyY": "伤害＋100%",
+      "copyZ": "伤害＋100%",
+      "stackableSynergies": [
+        "其他毒气相关伤害也叠加",
+        "吸虫之巢：毒气持续时间+50%"
+      ]
+    },
+    {
+      "originalId": 11,
+      "nameZh": "吸虫之巢",
+      "nameEn": "Flukenest",
+      "baseEffect": "复仇之魂 → 吸虫（单只 9 伤害 × 多段）",
+      "vanillaSynergy": "10",
+      "vanillaCost": 3,
+      "copyCost": 1,
+      "enhancedSynergy": "10",
+      "voidKnight": "",
+      "legacyEnhancement": "伤害提升至 5",
+      "copyX": "吸虫数量＋100%",
+      "copyY": "吸虫数量＋100%",
+      "copyZ": "吸虫数量＋100%",
+      "stackableSynergies": [
+        "10"
+      ]
+    },
+    {
+      "originalId": 12,
+      "nameZh": "荆棘之怒",
+      "nameEn": "Thorns of Agony",
+      "baseEffect": "受伤反击，约 16 伤害",
+      "vanillaSynergy": "",
+      "vanillaCost": 1,
+      "copyCost": 1,
+      "enhancedSynergy": "蘑菇孢子：荆棘伤害×150%",
+      "voidKnight": "骄傲印记：荆棘判定范围*120%",
+      "legacyEnhancement": "",
+      "copyX": "给反伤过程中多加一段伤害判定",
+      "copyY": "给反伤过程中多加一段伤害判定",
+      "copyZ": "给反伤过程中多加一段伤害判定",
+      "stackableSynergies": [
+        "蘑菇孢子：荆棘伤害×150%",
+        "13"
+      ]
+    },
+    {
+      "originalId": 13,
+      "nameZh": "骄傲印记",
+      "nameEn": "Mark of Pride",
+      "baseEffect": "钉子长度 +25%",
+      "vanillaSynergy": "",
+      "vanillaCost": 3,
+      "copyCost": 1,
+      "enhancedSynergy": "12",
+      "voidKnight": "",
+      "legacyEnhancement": "",
+      "copyX": "钉子长度 +25%",
+      "copyY": "钉子长度 +25%",
+      "copyZ": "钉子长度 +25%",
+      "stackableSynergies": [
+        "荆棘之怒：荆棘判定范围*120%",
+        "蜕变挽歌：增加35%剑气长度"
+      ]
+    },
+    {
+      "originalId": 14,
+      "nameZh": "稳定之体",
+      "nameEn": "Steady Body",
+      "baseEffect": "攻击无后坐力",
+      "vanillaSynergy": "",
+      "vanillaCost": 1,
+      "copyCost": 1,
+      "enhancedSynergy": "4+36",
+      "voidKnight": "",
+      "legacyEnhancement": "消除硬着陆效果",
+      "copyX": "国王之魂+飞毛腿：空中按住空格缓降",
+      "copyY": "虚空之心＋冲刺大师：空中多一次冲刺",
+      "copyZ": "国王之魂+虚空之心：空中多一次跳跃",
+      "stackableSynergies": []
+    },
+    {
+      "originalId": 15,
+      "nameZh": "沉重之击",
+      "nameEn": "Heavy Blow",
+      "baseEffect": "击退 +50%",
+      "vanillaSynergy": "",
+      "vanillaCost": 2,
+      "copyCost": 1,
+      "enhancedSynergy": "骨钉大师荣耀：蓄力斩在时间刚好时释放+50%伤害",
+      "voidKnight": "30+38",
+      "legacyEnhancement": "快速劈砍：使骨钉伤害提升 20%",
+      "copyX": "击退 +50%",
+      "copyY": "击退 +50%",
+      "copyZ": "击退 +50%",
+      "stackableSynergies": [
+        "骨钉大师荣耀：蓄力斩在时间刚好时释放+50%伤害",
+        "30+38"
+      ]
+    },
+    {
+      "originalId": 16,
+      "nameZh": "锋利之影",
+      "nameEn": "Sharp Shadow",
+      "baseEffect": "暗影冲刺造成 相当于钉伤的法伤",
+      "vanillaSynergy": "冲刺大师：将暗影造成的伤害提升至钉子伤害的1.5倍。不影响充能或冷却时间。",
+      "vanillaCost": 2,
+      "copyCost": 1,
+      "enhancedSynergy": "冲刺大师+飞毛腿：暗影冲刺cd*80%",
+      "voidKnight": "",
+      "legacyEnhancement": "飞毛腿：+无敌帧0.25s",
+      "copyX": "伤害＋100%",
+      "copyY": "伤害＋100%",
+      "copyZ": "伤害＋100%",
+      "stackableSynergies": [
+        "冲刺大师：伤害+50%",
+        "冲刺大师+飞毛腿：暗影冲刺cd*80%",
+        "虚空之心 + 灵魂捕手：使用锋利之影击中敌人时获得 8 灵魂"
+      ]
+    },
+    {
+      "originalId": 17,
+      "nameZh": "蘑菇孢子",
+      "nameEn": "Spore Shroom",
+      "baseEffect": "专注时毒云，约 2 DPS",
+      "vanillaSynergy": "深度聚集：孢子云半径增加35%",
+      "vanillaCost": 1,
+      "copyCost": 1,
+      "enhancedSynergy": "乌恩之形：孢子持续时间+50%",
+      "voidKnight": "12",
+      "legacyEnhancement": "",
+      "copyX": "聚集时多释放一团孢子云",
+      "copyY": "聚集时多释放一团孢子云",
+      "copyZ": "聚集时多释放一团孢子云",
+      "stackableSynergies": [
+        "乌恩之形：孢子持续时间+50%",
+        "深度聚集：孢子云半径增加35%"
+      ]
+    },
+    {
+      "originalId": 18,
+      "nameZh": "修长之钉",
+      "nameEn": "Longnail",
+      "baseEffect": "钉子长度 +15%",
+      "vanillaSynergy": "",
+      "vanillaCost": 2,
+      "copyCost": 1,
+      "enhancedSynergy": "35",
+      "voidKnight": "",
+      "legacyEnhancement": "",
+      "copyX": "钉子长度 +15%",
+      "copyY": "钉子长度 +15%",
+      "copyZ": "钉子长度 +15%",
+      "stackableSynergies": [
+        "35"
+      ]
+    },
+    {
+      "originalId": 19,
+      "nameZh": "萨满之石",
+      "nameEn": "Shaman Stone",
+      "baseEffect": "法术伤害 +33%",
+      "vanillaSynergy": "",
+      "vanillaCost": 3,
+      "copyCost": 1,
+      "enhancedSynergy": "26+36（国王之魂）",
+      "voidKnight": "",
+      "legacyEnhancement": "国王之魂：灵魂全满时左右挥击骨钉有 11% 几率释放消耗 11 灵魂的复仇之魂；每填满 1 格灵魂容器，几率 +11%",
+      "copyX": "法术伤害 +33%",
+      "copyY": "法术伤害 +33%",
+      "copyZ": "法术伤害 +33%",
+      "stackableSynergies": []
+    },
+    {
+      "originalId": 20,
+      "nameZh": "灵魂捕手",
+      "nameEn": "Soul Catcher",
+      "baseEffect": "钉子命中 +3 灵魂",
+      "vanillaSynergy": "",
+      "vanillaCost": 2,
+      "copyCost": 1,
+      "enhancedSynergy": "发光子宫:子宫生成冷却时间 -1 秒",
+      "voidKnight": "梦之盾：梦之盾攻击+6点灵魂",
+      "legacyEnhancement": "国王之魂：每两秒获得的灵魂 +1",
+      "copyX": "钉子命中 +3 灵魂",
+      "copyY": "钉子命中 +3 灵魂",
+      "copyZ": "钉子命中 +3 灵魂",
+      "stackableSynergies": [
+        "国王之魂：每两秒获得的灵魂 +1",
+        "梦之盾：梦之盾攻击+6点灵魂",
+        "36+16"
+      ]
+    },
+    {
+      "originalId": 21,
+      "nameZh": "噬魂者",
+      "nameEn": "Soul Eater",
+      "baseEffect": "钉子命中 +8 灵魂",
+      "vanillaSynergy": "",
+      "vanillaCost": 4,
+      "copyCost": 2,
+      "enhancedSynergy": "虚空之心 + 锋利之影：使用锋利之影击中敌人时获得 20 灵魂\n",
+      "voidKnight": "梦之盾：盾牌击中回复16点灵魂",
+      "legacyEnhancement": "国王之魂：每两秒获得的灵魂+3",
+      "copyX": "钉子命中 +8 灵魂",
+      "copyY": "钉子命中 +8 灵魂",
+      "copyZ": "钉子命中 +8 灵魂",
+      "stackableSynergies": [
+        "国王之魂：每两秒获得的灵魂+3",
+        "梦之盾：盾牌击中回复16点灵魂",
+        "36+16"
+      ]
+    },
+    {
+      "originalId": 22,
+      "nameZh": "发光子宫",
+      "nameEn": "Glowing Womb",
+      "baseEffect": "消耗灵魂生成幼体（9 伤害/只）",
+      "vanillaSynergy": "防御者纹章",
+      "vanillaCost": 2,
+      "copyCost": 1,
+      "enhancedSynergy": "1",
+      "voidKnight": "",
+      "legacyEnhancement": "伤害 +1（搭配守护者纹章时 +4）",
+      "copyX": "数量＋4",
+      "copyY": "数量＋4",
+      "copyZ": "数量＋4",
+      "stackableSynergies": [
+        "亡者之怒：进入亡怒状态，幼体伤害增加",
+        "33"
+      ]
+    },
+    {
+      "originalId": 23,
+      "nameZh": "易碎心脏",
+      "nameEn": "Fragile Heart",
+      "baseEffect": "+2 生命",
+      "vanillaSynergy": "",
+      "vanillaCost": 2,
+      "copyCost": 1,
+      "enhancedSynergy": "24",
+      "voidKnight": "8//9",
+      "legacyEnhancement": "",
+      "copyX": "+2 生命",
+      "copyY": "+2 生命",
+      "copyZ": "+2 生命",
+      "stackableSynergies": []
+    },
+    {
+      "originalId": 24,
+      "nameZh": "易碎贪婪",
+      "nameEn": "Fragile Greed",
+      "baseEffect": "Geo 获取 ×1.2",
+      "vanillaSynergy": "",
+      "vanillaCost": 2,
+      "copyCost": 1,
+      "enhancedSynergy": "原倍率变为2倍//搭配易碎/坚固力量geo再×（1+geo倍率×2）",
+      "voidKnight": "搭配易碎/坚固血量再×（1+geo倍率×2）",
+      "legacyEnhancement": "噬魂者：获得的吉欧量等额转化为灵魂",
+      "copyX": "Geo 获取 ×1.2",
+      "copyY": "Geo 获取 ×1.2",
+      "copyZ": "Geo 获取 ×1.2",
+      "stackableSynergies": []
+    },
+    {
+      "originalId": 25,
+      "nameZh": "易碎力量",
+      "nameEn": "Fragile Strength",
+      "baseEffect": "钉子伤害 ×1.5",
+      "vanillaSynergy": "",
+      "vanillaCost": 3,
+      "copyCost": 1,
+      "enhancedSynergy": "24",
+      "voidKnight": "易碎心脏：伤害再提高0.25",
+      "legacyEnhancement": "",
+      "copyX": "钉子伤害 +50%",
+      "copyY": "钉子伤害 +50%",
+      "copyZ": "钉子伤害 +50%",
+      "stackableSynergies": []
+    },
+    {
+      "originalId": 26,
+      "nameZh": "骨钉大师荣耀",
+      "nameEn": "Nailmaster’s Glory",
+      "baseEffect": "蓄力时间 -44%",
+      "vanillaSynergy": "",
+      "vanillaCost": 1,
+      "copyCost": 1,
+      "enhancedSynergy": "萨满之石+国王之魂：旋风劈砍和冲刺劈砍造成法术伤害,不会产生灵魂可穿透护盾",
+      "voidKnight": "15",
+      "legacyEnhancement": "",
+      "copyX": "蓄力时间*(1-44%)",
+      "copyY": "蓄力时间*(1-44%)",
+      "copyZ": "蓄力时间*(1-44%)",
+      "stackableSynergies": []
+    },
+    {
+      "originalId": 27,
+      "nameZh": "乔尼的祝福",
+      "nameEn": "Joni’s Blessing",
+      "baseEffect": "生命 → 生命血，血量 ×1.4",
+      "vanillaSynergy": "",
+      "vanillaCost": 4,
+      "copyCost": 2,
+      "enhancedSynergy": "搭配生命血之心，血量乘数+0.4//搭配生命血核心，血量乘数+0.7",
+      "voidKnight": "亡者之怒伤害加成全程触发",
+      "legacyEnhancement": "生命值倍率提升至1.5倍",
+      "copyX": "生命乘数加1",
+      "copyY": "生命乘数加1",
+      "copyZ": "生命乘数加1",
+      "stackableSynergies": [
+        "8",
+        "9"
+      ]
+    },
+    {
+      "originalId": 28,
+      "nameZh": "乌恩之形",
+      "nameEn": "Shape of Unn",
+      "baseEffect": "专注时可移动",
+      "vanillaSynergy": "",
+      "vanillaCost": 2,
+      "copyCost": 1,
+      "enhancedSynergy": "17",
+      "voidKnight": "",
+      "legacyEnhancement": "",
+      "copyX": "蜂巢之血：蜂巢血持续恢复",
+      "copyY": "蜂巢之血：蜂巢血恢复过程不会被打断",
+      "copyZ": "亡者之怒：亡怒状态下的乌恩状态不可选中",
+      "stackableSynergies": [
+        "17"
+      ]
+    },
+    {
+      "originalId": 29,
+      "nameZh": "蜂巢之血",
+      "nameEn": "Hiveblood",
+      "baseEffect": "10s 回复 1 点生命",
+      "vanillaSynergy": "",
+      "vanillaCost": 4,
+      "copyCost": 1,
+      "enhancedSynergy": "快速聚集+深度聚集:速度×2,即5s恢复1点生命（乔尼祝福为10s）",
+      "voidKnight": "28X//28Y",
+      "legacyEnhancement": "3",
+      "copyX": "同时多恢复的生命值*2",
+      "copyY": "同时多恢复的生命值*2",
+      "copyZ": "同时多恢复的生命值*2",
+      "stackableSynergies": [
+        "快速聚集+深度聚集:恢复再速度×2"
+      ]
+    },
+    {
+      "originalId": 30,
+      "nameZh": "舞梦者",
+      "nameEn": "Dream Wielder",
+      "baseEffect": "梦钉挥动时间*50%，命中 +33 灵魂",
+      "vanillaSynergy": "",
+      "vanillaCost": 1,
+      "copyCost": 1,
+      "enhancedSynergy": "15+38",
+      "voidKnight": "32+38",
+      "legacyEnhancement": "1+24：在梦境中获取geo",
+      "copyX": "梦钉挥动时间*50%，命中 +33 灵魂",
+      "copyY": "梦钉挥动时间*50%，命中 +33 灵魂",
+      "copyZ": "梦钉挥动时间*50%，命中 +33 灵魂",
+      "stackableSynergies": [
+        "15+38",
+        "32+38"
+      ]
+    },
+    {
+      "originalId": 31,
+      "nameZh": "冲刺大师",
+      "nameEn": "Dashmaster",
+      "baseEffect": "冲刺冷却 -33%",
+      "vanillaSynergy": "16",
+      "vanillaCost": 2,
+      "copyCost": 1,
+      "enhancedSynergy": "16+37",
+      "voidKnight": "",
+      "legacyEnhancement": "",
+      "copyX": "冲刺冷却*（1-33%）",
+      "copyY": "冲刺冷却*（1-33%）",
+      "copyZ": "冲刺冷却*（1-33%）",
+      "stackableSynergies": []
+    },
+    {
+      "originalId": 32,
+      "nameZh": "快速劈砍",
+      "nameEn": "Quick Slash",
+      "baseEffect": "攻击间隔 -39%",
+      "vanillaSynergy": "",
+      "vanillaCost": 3,
+      "copyCost": 1,
+      "enhancedSynergy": "30+38",
+      "voidKnight": "",
+      "legacyEnhancement": "15",
+      "copyX": "攻击间隔 *（1-39%）",
+      "copyY": "攻击间隔 *（1-39%）",
+      "copyZ": "攻击间隔 *（1-39%）",
+      "stackableSynergies": [
+        "30+38"
+      ]
+    },
+    {
+      "originalId": 33,
+      "nameZh": "法术扭曲者",
+      "nameEn": "Spell Twister",
+      "baseEffect": "法术消耗 -9",
+      "vanillaSynergy": "",
+      "vanillaCost": 2,
+      "copyCost": 1,
+      "enhancedSynergy": "3",
+      "voidKnight": "发光子宫：制造一个幼体的灵魂消耗-2",
+      "legacyEnhancement": "虚空之心：已升级法术的消耗额外 -4",
+      "copyX": "法术消耗 -9",
+      "copyY": "法术消耗 -9",
+      "copyZ": "法术消耗 -9",
+      "stackableSynergies": [
+        "发光子宫：制造一个幼体的灵魂消耗-2"
+      ]
+    },
+    {
+      "originalId": 34,
+      "nameZh": "深度聚集",
+      "nameEn": "Deep Focus",
+      "baseEffect": "专注回血 ×2，时间 ×2",
+      "vanillaSynergy": "",
+      "vanillaCost": 4,
+      "copyCost": 1,
+      "enhancedSynergy": "7+29",
+      "voidKnight": "",
+      "legacyEnhancement": "使水晶之心的伤害翻3倍，cd+0.2s",
+      "copyX": "专注回血×2，时间＋100%",
+      "copyY": "专注回血×2，时间＋100%",
+      "copyZ": "专注回血×2，时间＋100%",
+      "stackableSynergies": [
+        "17"
+      ]
+    },
+    {
+      "originalId": 35,
+      "nameZh": "蜕变挽歌",
+      "nameEn": "Grubberfly’s Elegy",
+      "baseEffect": "满血时发射光波（钉伤50%）",
+      "vanillaSynergy": "骄傲印记增长35%剑气长度",
+      "vanillaCost": 3,
+      "copyCost": 1,
+      "enhancedSynergy": "修长之钉：剑气击中也回复灵魂",
+      "voidKnight": "",
+      "legacyEnhancement": "27",
+      "copyX": "多一段剑气",
+      "copyY": "多一段剑气",
+      "copyZ": "多一段剑气",
+      "stackableSynergies": [
+        "修长之钉：第n剑气击中也回复灵魂",
+        "13"
+      ]
+    },
+    {
+      "originalId": 36,
+      "nameZh": "虚空之心",
+      "nameEn": "Void Heart",
+      "baseEffect": "剧情 / 虚空判定",
+      "vanillaSynergy": "",
+      "vanillaCost": 0,
+      "copyCost": 0,
+      "enhancedSynergy": "4+14",
+      "voidKnight": "",
+      "legacyEnhancement": "33",
+      "copyX": "1级格林之子：所有格林之子攻速*2",
+      "copyY": "国王之魂 Kingsoul",
+      "copyZ": "无忧旋律 Carefree Melody",
+      "stackableSynergies": []
+    },
+    {
+      "originalId": 37,
+      "nameZh": "飞毛腿",
+      "nameEn": "Sprintmaster",
+      "baseEffect": "移动速度 +20%",
+      "vanillaSynergy": "31：进一步将移动速度加成提升至39%",
+      "vanillaCost": 1,
+      "copyCost": 1,
+      "enhancedSynergy": "16+31",
+      "voidKnight": "",
+      "legacyEnhancement": "行走速度增加0.85f",
+      "copyX": "移动速度 +20%",
+      "copyY": "移动速度 +20%",
+      "copyZ": "移动速度 +20%",
+      "stackableSynergies": [
+        "冲刺大师：进一步将移动速度加成提升至39%"
+      ]
+    },
+    {
+      "originalId": 38,
+      "nameZh": "梦之盾",
+      "nameEn": "Dreamshield",
+      "baseEffect": "旋转盾，约 1.5s/次，13伤害",
+      "vanillaSynergy": "30：大小提升15%",
+      "vanillaCost": 3,
+      "copyCost": 1,
+      "enhancedSynergy": "沉重之击+舞梦者：盾伤害*1.5//快速劈砍＋舞梦者：盾攻击后恢复时间-20%",
+      "voidKnight": "20//21",
+      "legacyEnhancement": "",
+      "copyX": "加多一个盾",
+      "copyY": "加多一个盾",
+      "copyZ": "加多一个盾",
+      "stackableSynergies": [
+        "沉重之击+舞梦者：盾伤害*1.5",
+        "快速劈砍＋舞梦者：盾攻击后恢复时间-20%",
+        "20//21"
+      ]
+    },
+    {
+      "originalId": 39,
+      "nameZh": "编织者之歌",
+      "nameEn": "Weaversong",
+      "baseEffect": "蜘蛛攻击 3 伤害/次",
+      "vanillaSynergy": "飞毛腿：织网者移动速度提升50%",
+      "vanillaCost": 2,
+      "copyCost": 1,
+      "enhancedSynergy": "1",
+      "voidKnight": "",
+      "legacyEnhancement": "将编织者之巢伤害提升至5/7",
+      "copyX": "加3个编织者",
+      "copyY": "加3个编织者",
+      "copyZ": "加3个编织者",
+      "stackableSynergies": [
+        "1"
+      ]
+    },
+    {
+      "originalId": 40,
+      "nameZh": "格林之子",
+      "nameEn": "Grimmchild",
+      "baseEffect": "火球攻击，5 → 11 伤害（随阶段）",
+      "vanillaSynergy": "",
+      "vanillaCost": 2,
+      "copyCost": 1,
+      "enhancedSynergy": "41",
+      "voidKnight": "",
+      "legacyEnhancement": "",
+      "copyX": "2级格林之子",
+      "copyY": "无忧旋律 Carefree Melody",
+      "copyZ": "3级格林之子",
+      "stackableSynergies": []
+    }
+  ],
+  "alternateForms": {
+    "40": {
+      "originalId": 40,
+      "nameZh": "无忧旋律",
+      "nameEn": "Carefree Melody",
+      "baseEffect": "在受伤时按照概率抵挡伤害一次，没受伤0％10％20％30％50％70％80％，第7次90％。触发效果重置受伤害次数，但回血、坐椅子和进出梦境不重置该次数",
+      "vanillaSynergy": "",
+      "vanillaCost": 2,
+      "copyCost": 1,
+      "enhancedSynergy": "无忧旋律：所有格林之子伤害*2",
+      "voidKnight": "",
+      "legacyEnhancement": "乔尼的祝福 ：抵消伤害时获得 1 点生命血；若同时装备易碎心脏/不屈心脏且已获得生命血核心，额外获得 1 点生命血",
+      "copyX": "在受伤时按照概率抵挡伤害一次，没受伤0％10％20％30％50％70％80％，第7次90％。触发效果重置受伤害次数，但回血、坐椅子和进出梦境不重置该次数",
+      "copyY": "在受伤时按照概率抵挡伤害一次，没受伤0％10％20％30％50％70％80％，第7次90％。触发效果重置受伤害次数，但回血、坐椅子和进出梦境不重置该次数",
+      "copyZ": "在受伤时按照概率抵挡伤害一次，没受伤0％10％20％30％50％70％80％，第7次90％。触发效果重置受伤害次数，但回血、坐椅子和进出梦境不重置该次数",
+      "stackableSynergies": [
+        "多一段判定，叠加判断",
+        "概率叠加，第一次受伤概率=0.81，第二次＝0.64，第三次=0.49，第四次=0.25，第5次=0.16，第6次=0.09，第7次=0.01"
+      ]
+    },
+    "36": {
+      "originalId": 36,
+      "nameZh": "国王之魂",
+      "nameEn": "Kingsoul",
+      "baseEffect": "每两秒恢复4点灵魂",
+      "vanillaSynergy": "",
+      "vanillaCost": 5,
+      "copyCost": 2,
+      "enhancedSynergy": "33",
+      "voidKnight": "19+26",
+      "legacyEnhancement": "20/21",
+      "copyX": "每两秒恢复4点灵魂",
+      "copyY": "每两秒恢复4点灵魂",
+      "copyZ": "每两秒恢复4点灵魂",
+      "stackableSynergies": [
+        "20",
+        "21"
+      ]
+    }
+  }
+}

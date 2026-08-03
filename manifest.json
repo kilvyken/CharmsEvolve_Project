@@ -1,0 +1,9 @@
+{
+  "name": "CharmsEvolve",
+  "version_number": "0.1.0",
+  "website_url": "",
+  "description": "BepInEx Hollow Knight mod with 120 replica charms and paged charm UI.",
+  "dependencies": [
+    "BepInEx-BepInExPack-5.4.23"
+  ]
+}
