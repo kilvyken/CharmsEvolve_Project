@@ -58,11 +58,15 @@ namespace CharmsEvolve.Gameplay
                             _owned.Add(data.Owned[i]);
                 }
 
-                if (_plugin.UnlockAllCopies.Value && _owned.Count == 0)
+                if (_plugin.UnlockAllCopies.Value)
                 {
+                    bool addedAny = false;
                     for (int i = 0; i < CharmDatabase.AllCopies.Count; i++)
-                        _owned.Add(CharmDatabase.AllCopies[i].Key);
-                    _saveDirty = true;
+                        addedAny |= _owned.Add(CharmDatabase.AllCopies[i].Key);
+                    if (addedAny)
+                        _saveDirty = true;
+                    Plugin.Log.LogInfo("Test ownership enabled: all " + CharmDatabase.AllCopies.Count +
+                        " custom charm forms are owned for save slot " + slot + ".");
                 }
 
                 if (data.Equipped != null)
@@ -122,8 +126,20 @@ namespace CharmsEvolve.Gameplay
 
         public int GetTotalStackCount(int originalId)
         {
-            return GetCopyCount(originalId) +
-                   (GameReflection.IsVanillaCharmEquipped(originalId) ? 1 : 0);
+            return GetCopyCount(originalId) + (IsMatchingVanillaFormEquipped(originalId) ? 1 : 0);
+        }
+
+        private static bool IsMatchingVanillaFormEquipped(int originalId)
+        {
+            if (originalId == 41)
+                return GameReflection.IsVanillaCharmEquipped(40) && GameReflection.IsCarefreeMelodyForm();
+            if (originalId == 42)
+                return GameReflection.IsVanillaCharmEquipped(36) && !GameReflection.IsVoidHeartForm();
+            if (originalId == 40)
+                return GameReflection.IsVanillaCharmEquipped(40) && !GameReflection.IsCarefreeMelodyForm();
+            if (originalId == 36)
+                return GameReflection.IsVanillaCharmEquipped(36) && GameReflection.IsVoidHeartForm();
+            return GameReflection.IsVanillaCharmEquipped(originalId);
         }
 
         public bool IsOriginalOrCopyEquipped(int originalId)
@@ -219,6 +235,42 @@ namespace CharmsEvolve.Gameplay
             MarkChanged();
             Plugin.Log.LogInfo("Equipped copy charm " + definition.Key + "; resolved cost=" +
                 CharmsEvolveApi.ResolveCharmCost(definition) + ", custom notch total=" + GetCustomNotchCost() + ".");
+            return true;
+        }
+
+        public bool SwapEquippedForm(string oldKey, string newKey, out string reason)
+        {
+            reason = string.Empty;
+            if (string.IsNullOrEmpty(oldKey) || string.IsNullOrEmpty(newKey))
+            {
+                reason = "护符形态键无效。";
+                return false;
+            }
+            if (!_equipped.Contains(oldKey))
+                return true;
+
+            CopyCharmDefinition oldDefinition = CharmDatabase.GetCopy(oldKey);
+            CopyCharmDefinition newDefinition = CharmDatabase.GetCopy(newKey);
+            if (oldDefinition == null || newDefinition == null || !_owned.Contains(newKey))
+            {
+                reason = "目标护符形态不存在或尚未拥有。";
+                return false;
+            }
+
+            int usedWithoutOld = GetTotalUsedNotches() - CharmsEvolveApi.ResolveCharmCost(oldDefinition);
+            int newTotal = usedWithoutOld + CharmsEvolveApi.ResolveCharmCost(newDefinition);
+            int slots = GameReflection.GetCharmSlots();
+            if (newTotal > slots && !_plugin.AllowCustomOvercharm.Value)
+            {
+                reason = "切换后的护符槽不足。";
+                return false;
+            }
+
+            _equipped.Remove(oldKey);
+            _equipped.Add(newKey);
+            MarkChanged();
+            Plugin.Log.LogInfo("Transferred equipped custom charm form " + oldKey + " -> " + newKey +
+                "; custom notch total=" + GetCustomNotchCost() + ".");
             return true;
         }
 

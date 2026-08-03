@@ -7,7 +7,9 @@ namespace CharmsEvolve.Icons
 {
     /// <summary>
     /// Resolves the game's native inventory charm Sprite assets by name.
-    /// No tk2d atlas scraping and no unrelated Texture fallback is used.
+    /// IDs 41/42 are the copy-only Carefree Melody and Kingsoul identities;
+    /// they fall back to the shared 40/36 slot art until an exact native asset
+    /// or a CharmsEvolveApi.RegisterSprite override is available.
     /// </summary>
     internal sealed class VanillaCharmIconProvider : IDisposable, ICharmTextureProvider
     {
@@ -53,30 +55,14 @@ namespace CharmsEvolve.Icons
             _scanned = true;
 
             Sprite[] all = Resources.FindObjectsOfTypeAll<Sprite>();
-            for (int id = 1; id <= 40; id++)
+            for (int id = 1; id <= 42; id++)
             {
                 Sprite best = null;
                 int bestScore = int.MinValue;
-                Regex suffix = new Regex(@"(?:^|_)charm0*" + id + @"(?:$|_)", RegexOptions.IgnoreCase);
-
                 for (int i = 0; i < all.Length; i++)
                 {
                     Sprite candidate = all[i];
-                    if (candidate == null || string.IsNullOrEmpty(candidate.name))
-                        continue;
-                    if (!suffix.IsMatch(candidate.name))
-                        continue;
-
-                    int score = 0;
-                    if (candidate.name.StartsWith("Inv_", StringComparison.OrdinalIgnoreCase))
-                        score += 100;
-                    if (candidate.name.EndsWith("_charm" + id, StringComparison.OrdinalIgnoreCase))
-                        score += 80;
-                    if (candidate.name.IndexOf("charm" + id + "_", StringComparison.OrdinalIgnoreCase) >= 0)
-                        score += 20;
-                    if (candidate.texture != null)
-                        score += 10;
-
+                    int score = ScoreCandidate(candidate, id);
                     if (score > bestScore)
                     {
                         bestScore = score;
@@ -84,11 +70,81 @@ namespace CharmsEvolve.Icons
                     }
                 }
 
-                if (best != null)
+                if (best != null && bestScore > int.MinValue)
                     _sprites[id] = best;
-                else
+            }
+
+            Sprite fallback;
+            if (!_sprites.ContainsKey(41) && _sprites.TryGetValue(40, out fallback))
+            {
+                _sprites[41] = fallback;
+                Plugin.Log.LogWarning("Carefree Melody native Sprite was not resolved by name; using slot 40 art until RegisterSprite(\"X/Y/Z-41\", ...) is supplied.");
+            }
+            if (!_sprites.ContainsKey(42) && _sprites.TryGetValue(36, out fallback))
+            {
+                _sprites[42] = fallback;
+                Plugin.Log.LogWarning("Kingsoul native Sprite was not resolved by name; using slot 36 art until RegisterSprite(\"X/Y/Z-42\", ...) is supplied.");
+            }
+
+            for (int id = 1; id <= 42; id++)
+            {
+                if (!_sprites.ContainsKey(id))
                     Plugin.Log.LogWarning("Native charm Sprite not found for charm " + id + ".");
             }
+        }
+
+        private static int ScoreCandidate(Sprite candidate, int id)
+        {
+            if (candidate == null || string.IsNullOrEmpty(candidate.name))
+                return int.MinValue;
+
+            string name = candidate.name;
+            int score = int.MinValue;
+            if (id == 41)
+            {
+                if (ContainsAny(name, "carefree", "melody", "care_free", "carefree_melody"))
+                    score = 500;
+                else if (MatchesCharmNumber(name, 41))
+                    score = 300;
+            }
+            else if (id == 42)
+            {
+                if (ContainsAny(name, "kingsoul", "king_soul", "king soul", "royalcharm", "royal_charm"))
+                    score = 500;
+                else if (MatchesCharmNumber(name, 42))
+                    score = 300;
+            }
+            else if (MatchesCharmNumber(name, id))
+            {
+                score = 100;
+            }
+
+            if (score == int.MinValue)
+                return score;
+            if (name.StartsWith("Inv_", StringComparison.OrdinalIgnoreCase))
+                score += 120;
+            if (name.IndexOf("inventory", StringComparison.OrdinalIgnoreCase) >= 0)
+                score += 60;
+            if (candidate.texture != null)
+                score += 10;
+            return score;
+        }
+
+        private static bool MatchesCharmNumber(string name, int id)
+        {
+            string pattern = @"(?:^|[_\s-])charm[_\s-]*0*" + id + @"(?:$|[_\s-])";
+            return Regex.IsMatch(name, pattern, RegexOptions.IgnoreCase) ||
+                   Regex.IsMatch(name, @"(?:^|_)charm0*" + id + @"(?:$|_)", RegexOptions.IgnoreCase);
+        }
+
+        private static bool ContainsAny(string value, params string[] fragments)
+        {
+            for (int i = 0; i < fragments.Length; i++)
+            {
+                if (value.IndexOf(fragments[i], StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+            }
+            return false;
         }
     }
 }

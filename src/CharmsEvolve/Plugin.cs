@@ -9,7 +9,7 @@ namespace CharmsEvolve
     [BepInPlugin(
         "com.hollowknight.charmsevolve",
         "Charms Evolve",
-        "0.3.1")]
+        "0.4.0")]
     [BepInProcess("hollow_knight.exe")]
     [BepInProcess("hollow_knight.x86_64")]
     [BepInProcess("hollow_knight")]
@@ -17,7 +17,7 @@ namespace CharmsEvolve
     {
         public const string PluginGuid = "com.hollowknight.charmsevolve";
         public const string PluginName = "Charms Evolve";
-        public const string PluginVersion = "0.3.1";
+        public const string PluginVersion = "0.4.0";
 
         internal static Plugin Instance { get; private set; }
         internal static ManualLogSource Log { get; private set; }
@@ -40,7 +40,7 @@ namespace CharmsEvolve
             AllowCustomOvercharm = Config.Bind("Gameplay", "AllowCustomOvercharm", false,
                 "允许复制护符使槽位超载。");
             UnlockAllCopies = Config.Bind("Gameplay", "UnlockAllCopies", true,
-                "新存档默认拥有全部 120 个复制护符。");
+                "测试阶段默认拥有全部 126 个复制护符形态。");
             EnableExperimentalGameplayPatches = Config.Bind("Gameplay", "EnableExperimentalPatches", true,
                 "启用通用伤害、吉欧、受伤回魂等运行时补丁。复杂表格联动仍通过公开接口扩展。");
 

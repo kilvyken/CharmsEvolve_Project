@@ -14,17 +14,19 @@ using CharmsEvolve.Api;
 namespace CharmsEvolve.UI
 {
     /// <summary>
-    /// Pages the game's own 40-slot charm collection. It reuses CharmsPane, the
-    /// "UI Charms" FSM, the original cursor, the original grid roots, native Sprite
-    /// assets, native detail widgets and native visual/audio actions.
+    /// Pages the game's own 40-slot charm collection. Unity 6 is anchored by the
+    /// live CharmItem/Charms hierarchy; Unity 5 can still fall back to "UI Charms".
+    /// The original cursor, grid roots, native Sprite/detail widgets and native
+    /// visual/audio actions are reused instead of drawing an overlay.
     /// </summary>
     internal sealed class CharmPageController : IDisposable
     {
         private const int PageCount = 4;
         private const float PageFadeOutSeconds = 0.08f;
         private const float PageFadeInSeconds = 0.11f;
+        private const float SpecialFormHoldSeconds = 0.70f;
 
-        // Same world-space position and collider size used by CharmPreset's selector.
+        // Legacy fallback used by Unity 5. Unity 6 resolves a position above the live grid.
         private static readonly Vector3 PageSelectorPosition = new Vector3(0.6f, 1.4f, -3.33f);
         private static readonly Vector2 PageSelectorColliderSize = new Vector2(1.3f, 1.3f);
 
@@ -69,6 +71,7 @@ namespace CharmsEvolve.UI
         private readonly Dictionary<int, Slot> _slotByOriginalId = new Dictionary<int, Slot>();
 
         private GameObject _pane;
+        private GameObject _gridRoot;
         private Component _uiCharmsFsm;
         private Component _updateCursorFsm;
         private Component _nameText;
@@ -78,6 +81,7 @@ namespace CharmsEvolve.UI
 
         private GameObject _pageSelector;
         private SpriteRenderer _pageSelectorRenderer;
+        private Vector3 _resolvedPageSelectorPosition = PageSelectorPosition;
         private Component _pageSelectorCollider;
         private readonly Sprite[] _pageSelectorSprites = new Sprite[PageCount];
         private bool _pageSelectorSelected;
@@ -89,6 +93,22 @@ namespace CharmsEvolve.UI
         private Color _originalDetailColor;
         private bool _originalDetailEnabled;
         private bool _detailSnapshotValid;
+        private bool _descriptionTypographyCaptured;
+        private float _originalDescriptionFontSize;
+        private float _originalDescriptionFontSizeMin;
+        private float _originalDescriptionFontSizeMax;
+        private bool _originalDescriptionAutoSizing;
+
+        // Slot 36 and 40 each expose one additional form per custom page.
+        // false = Void Heart / Grimmchild, true = Kingsoul / Carefree Melody.
+        private readonly bool[] _showKingsoul = new bool[3];
+        private readonly bool[] _showCarefreeMelody = new bool[3];
+        private bool _specialFormHoldActive;
+        private bool _specialFormHoldTriggered;
+        private float _specialFormHoldStartedAt;
+        private int _specialFormHoldStartedFrame;
+        private Slot _specialFormHoldSlot;
+        private bool _loggedSubmitProbeFallback;
 
         private int _page;
         private bool _transitioning;
@@ -102,6 +122,9 @@ namespace CharmsEvolve.UI
         private int _lastConsumedFrame = -1;
         private string _lastConsumedEvent = string.Empty;
         private bool _loggedMissingNativeFeedback;
+        private bool _loggedMissingNavigationFsm;
+        private bool _loggedGridDiagnostics;
+        private float _nextGridWarningAt;
         private Color _nativeUnequippedColor = Color.white;
         private Color _nativeEquippedColor = new Color(0.42f, 0.42f, 0.42f, 1f);
         private bool _hasNativeUnequippedColor;
@@ -148,28 +171,30 @@ namespace CharmsEvolve.UI
                 return;
             }
 
-            if (_pane == null || _uiCharmsFsm == null)
+            if (_pane == null || _gridRoot == null)
             {
                 ResetBuild();
                 return;
             }
 
-            // CharmPreset constrains this selector because the inventory may shift it by +100 Y.
-            if (_pageSelector != null)
+            if (!_gridRoot.activeInHierarchy)
             {
-                Vector3 position = _pageSelector.transform.position;
-                if (Mathf.Abs(position.y - PageSelectorPosition.y) > 0.01f)
-                {
-                    position.y = PageSelectorPosition.y;
-                    _pageSelector.transform.position = position;
-                }
+                CancelSpecialFormHold(false);
+                return;
             }
+
+            UpdateSpecialFormHold();
+
+            // Unity 5 could shift the selector by +100 Y. Unity 6 uses a different
+            // hierarchy, so constrain it to the position resolved from the live grid.
+            if (_pageSelector != null &&
+                (_pageSelector.transform.position - _resolvedPageSelectorPosition).sqrMagnitude > 0.0001f)
+                _pageSelector.transform.position = _resolvedPageSelectorPosition;
 
             // Do not reset the selected charm page when the player visits the inventory's
             // equipment or journal panes. Keeping it makes the page feel integrated with the
             // original left/right inventory arrows.
-            if (_pane.activeInHierarchy && _page > 0 && !_transitioning &&
-                Time.unscaledTime >= _nextRefresh)
+            if (_page > 0 && !_transitioning && Time.unscaledTime >= _nextRefresh)
             {
                 _nextRefresh = Time.unscaledTime + 0.10f;
                 ApplyPageVisuals();
@@ -178,7 +203,7 @@ namespace CharmsEvolve.UI
 
         public void LateTick()
         {
-            if (!_built || _pane == null || !_pane.activeInHierarchy)
+            if (!_built || _pane == null || _gridRoot == null || !_gridRoot.activeInHierarchy)
                 return;
 
             if (_transitioning)
@@ -198,6 +223,7 @@ namespace CharmsEvolve.UI
         public void Dispose()
         {
             _disposed = true;
+            CancelSpecialFormHold(false);
             if (_eventTarget == this)
                 _eventTarget = null;
 
@@ -267,7 +293,7 @@ namespace CharmsEvolve.UI
 
         private bool TryConsumeUiEvent(object eventOwner, string eventName)
         {
-            if (!_built || _pane == null || !_pane.activeInHierarchy)
+            if (!_built || _pane == null || _gridRoot == null || !_gridRoot.activeInHierarchy)
                 return false;
             if (!CharmUtil.IsUiCharmsOwner(eventOwner))
                 return false;
@@ -280,9 +306,23 @@ namespace CharmsEvolve.UI
                 string.Equals(_lastConsumedEvent, eventName, StringComparison.Ordinal))
                 return true;
 
-            bool onSelector = IsPageSelectorSelected();
+            if (_specialFormHoldActive &&
+                (eventName.IndexOf("LEFT", StringComparison.Ordinal) >= 0 ||
+                 eventName.IndexOf("RIGHT", StringComparison.Ordinal) >= 0 ||
+                 eventName.IndexOf("UP", StringComparison.Ordinal) >= 0 ||
+                 eventName.IndexOf("DOWN", StringComparison.Ordinal) >= 0))
+                CancelSpecialFormHold(false);
+
+            GameObject eventOwnerObject = CharmUtil.GetOwnerGameObject(eventOwner);
+            bool onSelector = IsPageSelectorSelected() || IsPageSelectorObject(eventOwnerObject);
+            if (onSelector)
+                _pageSelectorSelected = true;
             Slot selected = GetSelectedSlot();
-            string stateName = CharmUtil.GetActiveStateName(_uiCharmsFsm);
+            if (selected == null)
+                selected = GetSlotFromEventOwner(eventOwner);
+            if (selected != null)
+                _lastGridSlot = selected;
+            string stateName = CharmUtil.GetActiveStateName(_uiCharmsFsm ?? eventOwner);
 
             if (onSelector)
             {
@@ -347,7 +387,10 @@ namespace CharmsEvolve.UI
             if (_page > 0 && selected != null && IsEvent(eventName, "UI CONFIRM"))
             {
                 MarkConsumed(eventName);
-                ConfirmSelected(selected);
+                if (IsSpecialFormSlot(selected))
+                    BeginSpecialFormHold(selected);
+                else
+                    ConfirmSelected(selected);
                 return true;
             }
 
@@ -384,6 +427,15 @@ namespace CharmsEvolve.UI
             }
 
             return _pageSelectorSelected;
+        }
+
+        private bool IsPageSelectorObject(GameObject candidate)
+        {
+            if (candidate == null || _pageSelector == null)
+                return false;
+            return candidate == _pageSelector ||
+                   candidate.transform.IsChildOf(_pageSelector.transform) ||
+                   _pageSelector.transform.IsChildOf(candidate.transform);
         }
 
         private void SelectPageSelector(Slot fromSlot)
@@ -480,8 +532,171 @@ namespace CharmsEvolve.UI
                 Plugin.Log.LogDebug("Custom charm confirm completed without an equipment-state change: " + definition.Key);
         }
 
+        private bool IsSpecialFormSlot(Slot slot)
+        {
+            return slot != null && _page > 0 &&
+                   (slot.OriginalId == 36 || slot.OriginalId == 40);
+        }
+
+        private void BeginSpecialFormHold(Slot slot)
+        {
+            if (!IsSpecialFormSlot(slot) || _transitioning)
+                return;
+
+            if (_specialFormHoldActive && _specialFormHoldSlot == slot)
+                return;
+
+            CancelSpecialFormHold(false);
+            _specialFormHoldActive = true;
+            _specialFormHoldTriggered = false;
+            _specialFormHoldStartedAt = Time.unscaledTime;
+            _specialFormHoldStartedFrame = Time.frameCount;
+            _specialFormHoldSlot = slot;
+        }
+
+        private void UpdateSpecialFormHold()
+        {
+            if (!_specialFormHoldActive || _specialFormHoldSlot == null)
+                return;
+            if (_page <= 0 || _transitioning || GetSelectedSlot() != _specialFormHoldSlot)
+            {
+                CancelSpecialFormHold(false);
+                return;
+            }
+
+            // Give the input system one frame after UI CONFIRM before testing release.
+            if (Time.frameCount <= _specialFormHoldStartedFrame + 1)
+                return;
+
+            bool sourceResolved;
+            bool pressed = GameReflection.IsMenuSubmitPressed(out sourceResolved);
+            if (!sourceResolved && !_loggedSubmitProbeFallback)
+            {
+                _loggedSubmitProbeFallback = true;
+                Plugin.Log.LogWarning(
+                    "Menu-submit hold source was not resolved. Tap CONFIRM still works, but the 36/40 long-hold form switch needs an InputHandler member dump from UnityExplorer.");
+            }
+
+            if (pressed)
+            {
+                if (!_specialFormHoldTriggered &&
+                    Time.unscaledTime - _specialFormHoldStartedAt >= SpecialFormHoldSeconds)
+                {
+                    _specialFormHoldTriggered = true;
+                    TriggerNativeFormSwapFeedback(_specialFormHoldSlot);
+                    SwapSpecialForm(_specialFormHoldSlot);
+                }
+                return;
+            }
+
+            Slot releasedSlot = _specialFormHoldSlot;
+            bool triggered = _specialFormHoldTriggered;
+            CancelSpecialFormHold(false);
+            if (!triggered && releasedSlot != null)
+                ConfirmSelected(releasedSlot);
+        }
+
+        private void CancelSpecialFormHold(bool confirmTap)
+        {
+            Slot slot = _specialFormHoldSlot;
+            bool triggered = _specialFormHoldTriggered;
+            _specialFormHoldActive = false;
+            _specialFormHoldTriggered = false;
+            _specialFormHoldStartedAt = 0f;
+            _specialFormHoldStartedFrame = 0;
+            _specialFormHoldSlot = null;
+
+            if (confirmTap && !triggered && slot != null)
+                ConfirmSelected(slot);
+        }
+
+        private void SwapSpecialForm(Slot slot)
+        {
+            if (!IsSpecialFormSlot(slot))
+                return;
+
+            CopyCharmDefinition oldDefinition = GetDefinition(slot);
+            int pageIndex = _page - 1;
+            string target;
+            if (slot.OriginalId == 36)
+            {
+                _showKingsoul[pageIndex] = !_showKingsoul[pageIndex];
+                target = _showKingsoul[pageIndex] ? "国王之魂" : "虚空之心";
+            }
+            else
+            {
+                _showCarefreeMelody[pageIndex] = !_showCarefreeMelody[pageIndex];
+                target = _showCarefreeMelody[pageIndex] ? "无忧旋律" : "格林之子";
+            }
+
+            CopyCharmDefinition newDefinition = GetDefinition(slot);
+            string reason;
+            if (oldDefinition != null && newDefinition != null &&
+                !_state.SwapEquippedForm(oldDefinition.Key, newDefinition.Key, out reason))
+            {
+                if (slot.OriginalId == 36)
+                    _showKingsoul[pageIndex] = !_showKingsoul[pageIndex];
+                else
+                    _showCarefreeMelody[pageIndex] = !_showCarefreeMelody[pageIndex];
+
+                _status = reason;
+                _statusUntil = Time.unscaledTime + 2.5f;
+                ReplayNativeReminderFeedback(reason);
+                ApplySlotVisual(slot);
+                UpdateDetails(slot);
+                Plugin.Log.LogWarning("Custom charm form switch rejected: " + reason);
+                return;
+            }
+
+            _status = "已切换为" + target + "。";
+            _statusUntil = Time.unscaledTime + 2.5f;
+            ApplySlotVisual(slot);
+            UpdateDetails(slot);
+            Plugin.Log.LogInfo("Custom charm form switched on page " + _page +
+                ", slot " + slot.OriginalId + " -> " + target + ".");
+        }
+
+        private void TriggerNativeFormSwapFeedback(Slot slot)
+        {
+            if (slot == null)
+                return;
+
+            string[] stateCandidates =
+            {
+                "Overcharm", "Overcharmed", "Over Charm", "Charm Overload",
+                "Bound Reminder", "Notches Full", "Full", "Shake"
+            };
+            bool replayed = false;
+            for (int i = 0; i < stateCandidates.Length && !replayed; i++)
+                replayed = TryInvokeNativeFeedbackActions(stateCandidates[i]);
+            if (!replayed)
+                replayed = TryInvokeNativeFeedbackStateByFragments(
+                    new[] { "overcharm", "over charm", "overload", "bound", "shake", "full" });
+
+            Component[] components = slot.Root == null
+                ? new Component[0]
+                : slot.Root.GetComponentsInChildren<Component>(true);
+            string[] events = { "OVERCHARM", "OVERCHARMED", "SHAKE", "BOUND", "INVALID" };
+            for (int i = 0; i < components.Length; i++)
+            {
+                Component component = components[i];
+                if (component == null || !string.Equals(component.GetType().Name, "PlayMakerFSM", StringComparison.Ordinal))
+                    continue;
+                for (int j = 0; j < events.Length; j++)
+                    replayed |= CharmUtil.SendFsmEvent(component, events[j]);
+            }
+
+            if (!replayed)
+            {
+                TryInvokeNativeAudioAction("Bound Reminder", 0);
+                Plugin.Log.LogWarning(
+                    "Native overcharm shake/audio state was not resolved for the 36/40 long-hold form switch. See the emitted FSM diagnostic list.");
+            }
+        }
+
         private void RequestPage(int page)
         {
+            CancelSpecialFormHold(false);
             page = ((page % PageCount) + PageCount) % PageCount;
             if (page == _page || _transitioning)
                 return;
@@ -567,27 +782,42 @@ namespace CharmsEvolve.UI
                 return;
             _nextBuildAttempt = Time.unscaledTime + 0.75f;
 
+            GameObject grid = CharmUtil.CharmsGrid;
             GameObject pane = CharmUtil.CharmsPane;
-            Component uiFsm = CharmUtil.UiCharmsFsm;
-            if (pane == null || uiFsm == null)
+            if (grid == null && pane == null)
                 return;
 
-            _pane = pane;
-            _uiCharmsFsm = uiFsm;
-            _updateCursorFsm = FindFsmInChildren(pane, "Update Cursor");
-            _fadeGroup = FindComponentByTypeName(pane, "FadeGroup");
+            _gridRoot = grid ?? pane;
+            _pane = pane ?? _gridRoot;
+            _uiCharmsFsm = CharmUtil.UiCharmsFsm;
+            _updateCursorFsm = FindFsmAround(_pane, "Update Cursor");
+            _fadeGroup = FindComponentByTypeNameAround(_pane, "FadeGroup");
 
             if (!BuildSlots())
             {
-                Plugin.Log.LogWarning("UI Charms found, but the native 40-charm grid could not be resolved yet.");
+                if (Time.unscaledTime >= _nextGridWarningAt)
+                {
+                    _nextGridWarningAt = Time.unscaledTime + 10f;
+                    Plugin.Log.LogWarning(
+                        "Charm pane was resolved, but fewer than 40 live collection slots were found. Unity 6 CharmItem diagnostics follow.");
+                    LogGridProbeDiagnostics();
+                }
                 ResetBuildObjectsOnly();
                 return;
             }
 
             ResolveDetailPanel();
+            CaptureDescriptionTypography();
+            _resolvedPageSelectorPosition = ResolvePageSelectorPosition();
             BuildPageSelector();
             EnforceNativeRendererSettings();
 
+            if (_uiCharmsFsm == null && !_loggedMissingNavigationFsm)
+            {
+                _loggedMissingNavigationFsm = true;
+                Plugin.Log.LogWarning(
+                    "The Unity 6 charm grid was found without a single global charm-navigation FSM. Slot-local FSM events and the Update Cursor FSM will be used as fallbacks.");
+            }
             if (_nameText == null || _descriptionText == null)
                 Plugin.Log.LogWarning("Native charm detail text was not fully resolved; current-game object names may differ.");
             if (_detailIcon == null)
@@ -595,7 +825,12 @@ namespace CharmsEvolve.UI
 
             _built = true;
             UpdatePageSelectorSprite();
-            Plugin.Log.LogInfo("Native charm pager ready. Grid slots: " + _slots.Count + ".");
+            Plugin.Log.LogInfo(
+                "Native charm pager ready. Grid slots=" + _slots.Count +
+                ", grid=" + CharmUtil.GetHierarchyPath(_gridRoot) +
+                ", pane=" + CharmUtil.GetHierarchyPath(_pane) +
+                ", navigationFSM=" + (_uiCharmsFsm == null ? "<none>" : CharmUtil.GetFsmName(_uiCharmsFsm)) + ".");
+            LogGridProbeDiagnostics();
         }
 
         private bool BuildSlots()
@@ -603,47 +838,55 @@ namespace CharmsEvolve.UI
             _slots.Clear();
             _slotByOriginalId.Clear();
 
-            SpriteRenderer[] renderers = _pane.GetComponentsInChildren<SpriteRenderer>(true);
-            Dictionary<int, SpriteRenderer> bestRenderer = new Dictionary<int, SpriteRenderer>();
-            Dictionary<int, int> bestScore = new Dictionary<int, int>();
+            Dictionary<int, Slot> bestSlots = new Dictionary<int, Slot>();
+            Dictionary<int, int> bestScores = new Dictionary<int, int>();
 
-            for (int i = 0; i < renderers.Length; i++)
+            Component[] charmItems = CharmUtil.FindAllCharmItems();
+            for (int i = 0; i < charmItems.Length; i++)
             {
-                SpriteRenderer renderer = renderers[i];
-                if (renderer == null || renderer.sprite == null)
-                    continue;
-
+                Component item = charmItems[i];
                 int id;
-                if (!TryParseCharmSpriteId(renderer.sprite.name, out id) || id < 1 || id > 40)
+                if (!CharmUtil.TryGetCharmItemId(item, out id) || id < 1 || id > 40)
+                    continue;
+                if (!IsLiveCollectionRoot(item.gameObject))
                     continue;
 
-                int score = ScoreGridRenderer(renderer);
-                int previous;
-                if (bestScore.TryGetValue(id, out previous) && previous >= score)
-                    continue;
-
-                bestScore[id] = score;
-                bestRenderer[id] = renderer;
+                TryAddSlotCandidate(bestSlots, bestScores, id, item.gameObject, item, 500);
             }
+
+            // Unity 6 can deactivate CharmItem while retaining the numbered slot root.
+            // Enumerate those roots directly so Resources/active-state differences do not
+            // reduce the collection to only the currently visible or equipped items.
+            if (_gridRoot != null)
+            {
+                Transform[] transforms = _gridRoot.GetComponentsInChildren<Transform>(true);
+                for (int i = 0; i < transforms.Length; i++)
+                {
+                    Transform transform = transforms[i];
+                    if (transform == null || transform.gameObject == null)
+                        continue;
+
+                    int id;
+                    if (!int.TryParse(transform.gameObject.name, out id) || id < 1 || id > 40)
+                        continue;
+                    if (!IsLiveCollectionRoot(transform.gameObject))
+                        continue;
+
+                    Component charmItem = FindDirectComponentByTypeName(transform.gameObject, "CharmItem");
+                    TryAddSlotCandidate(bestSlots, bestScores, id, transform.gameObject, charmItem, 300);
+                }
+            }
+
+            // Unity 5 fallback: old builds have no CharmItem component and identify the
+            // collection through inventory Sprite names.
+            AddLegacySpriteCandidates(bestSlots, bestScores);
 
             for (int id = 1; id <= 40; id++)
             {
-                SpriteRenderer renderer;
-                if (!bestRenderer.TryGetValue(id, out renderer))
+                Slot slot;
+                if (!bestSlots.TryGetValue(id, out slot) || slot == null)
                     continue;
 
-                GameObject root = FindSelectableRoot(renderer.gameObject, _pane.transform);
-                Slot slot = new Slot
-                {
-                    OriginalId = id,
-                    Root = root,
-                    Icon = renderer,
-                    OriginalSprite = renderer.sprite,
-                    OriginalColor = renderer.color,
-                    OriginalEnabled = renderer.enabled
-                };
-                CaptureMarkers(slot);
-                slot.PageColor = slot.OriginalColor;
                 _slots.Add(slot);
                 _slotByOriginalId[id] = slot;
             }
@@ -656,46 +899,220 @@ namespace CharmsEvolve.UI
             return true;
         }
 
+        private void TryAddSlotCandidate(
+            Dictionary<int, Slot> bestSlots,
+            Dictionary<int, int> bestScores,
+            int id,
+            GameObject root,
+            Component charmItem,
+            int baseScore)
+        {
+            if (root == null)
+                return;
+
+            SpriteRenderer icon = ResolveCharmItemIcon(root, charmItem);
+            if (icon == null)
+                return;
+
+            int score = baseScore + ScoreSlotRoot(root, icon, charmItem);
+            int previous;
+            if (bestScores.TryGetValue(id, out previous) && previous >= score)
+                return;
+
+            Slot slot = new Slot
+            {
+                OriginalId = id,
+                Root = root,
+                Icon = icon,
+                OriginalSprite = icon.sprite,
+                OriginalColor = icon.color,
+                OriginalEnabled = icon.enabled
+            };
+            CaptureMarkers(slot);
+            slot.PageColor = slot.OriginalColor;
+            bestScores[id] = score;
+            bestSlots[id] = slot;
+        }
+
+        private bool IsLiveCollectionRoot(GameObject gameObject)
+        {
+            if (gameObject == null || _gridRoot == null)
+                return false;
+            if (gameObject != _gridRoot && !gameObject.transform.IsChildOf(_gridRoot.transform))
+                return false;
+
+            Transform current = gameObject.transform;
+            Transform boundary = _pane == null ? null : _pane.transform.parent;
+            while (current != null && current != boundary)
+            {
+                if (string.Equals(current.gameObject.name, "Equipped Charms", StringComparison.OrdinalIgnoreCase))
+                    return false;
+                if (current == _gridRoot.transform)
+                    return true;
+                current = current.parent;
+            }
+            return false;
+        }
+
+        private static Component FindDirectComponentByTypeName(GameObject root, string typeName)
+        {
+            if (root == null)
+                return null;
+
+            Component[] components = root.GetComponents<Component>();
+            for (int i = 0; i < components.Length; i++)
+            {
+                Component component = components[i];
+                if (component != null && string.Equals(component.GetType().Name, typeName, StringComparison.OrdinalIgnoreCase))
+                    return component;
+            }
+            return null;
+        }
+
+        private static SpriteRenderer ResolveCharmItemIcon(GameObject root, Component charmItem)
+        {
+            SpriteRenderer direct = root == null ? null : root.GetComponent<SpriteRenderer>();
+            if (direct != null && !IsMarkerRenderer(direct))
+                return direct;
+
+            string[] members =
+            {
+                "spriteRenderer", "SpriteRenderer", "renderer", "Renderer",
+                "icon", "Icon", "charmRenderer", "CharmRenderer", "display", "Display"
+            };
+            if (charmItem != null)
+            {
+                for (int i = 0; i < members.Length; i++)
+                {
+                    object value;
+                    if (!CharmUtil.TryGetMember(charmItem, members[i], out value) || value == null)
+                        continue;
+
+                    SpriteRenderer renderer = value as SpriteRenderer;
+                    if (renderer != null && !IsMarkerRenderer(renderer))
+                        return renderer;
+
+                    Component component = value as Component;
+                    if (component != null)
+                    {
+                        renderer = component.GetComponent<SpriteRenderer>();
+                        if (renderer != null && !IsMarkerRenderer(renderer))
+                            return renderer;
+                    }
+                }
+            }
+
+            SpriteRenderer[] renderers = root == null
+                ? new SpriteRenderer[0]
+                : root.GetComponentsInChildren<SpriteRenderer>(true);
+            SpriteRenderer best = null;
+            int bestScore = int.MinValue;
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                SpriteRenderer renderer = renderers[i];
+                if (renderer == null || IsMarkerRenderer(renderer))
+                    continue;
+
+                int score = 0;
+                if (renderer.gameObject == root)
+                    score += 200;
+                if (renderer.sprite != null)
+                    score += 100;
+                string name = renderer.gameObject.name ?? string.Empty;
+                if (name.IndexOf("icon", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    name.IndexOf("charm", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    name.IndexOf("sprite", StringComparison.OrdinalIgnoreCase) >= 0)
+                    score += 50;
+                if (string.Equals(renderer.sortingLayerName, "HUD", StringComparison.OrdinalIgnoreCase))
+                    score += 20;
+
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    best = renderer;
+                }
+            }
+            return best;
+        }
+
+        private static bool IsMarkerRenderer(SpriteRenderer renderer)
+        {
+            if (renderer == null || renderer.gameObject == null)
+                return false;
+            string name = renderer.gameObject.name ?? string.Empty;
+            return name.IndexOf("equipped", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf("lock", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf("unknown", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf("unowned", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf("cursor", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf("highlight", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static int ScoreSlotRoot(GameObject root, SpriteRenderer icon, Component charmItem)
+        {
+            int score = 0;
+            if (root.activeInHierarchy)
+                score += 80;
+            if (root.transform.parent != null &&
+                string.Equals(root.transform.parent.gameObject.name, "Charms", StringComparison.OrdinalIgnoreCase))
+                score += 100;
+            if (charmItem != null)
+                score += 100;
+            if (icon != null && icon.sprite != null)
+                score += 40;
+
+            Component[] components = root.GetComponents<Component>();
+            for (int i = 0; i < components.Length; i++)
+            {
+                Component component = components[i];
+                if (component == null)
+                    continue;
+                string typeName = component.GetType().Name;
+                if (typeName.IndexOf("Collider2D", StringComparison.OrdinalIgnoreCase) >= 0)
+                    score += 30;
+                if (string.Equals(typeName, "PlayMakerFSM", StringComparison.Ordinal))
+                    score += 20;
+            }
+            return score;
+        }
+
+        private void AddLegacySpriteCandidates(
+            Dictionary<int, Slot> bestSlots,
+            Dictionary<int, int> bestScores)
+        {
+            GameObject searchRoot = _gridRoot ?? _pane;
+            if (searchRoot == null)
+                return;
+
+            SpriteRenderer[] renderers = searchRoot.GetComponentsInChildren<SpriteRenderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                SpriteRenderer renderer = renderers[i];
+                if (renderer == null || renderer.sprite == null)
+                    continue;
+
+                int id;
+                if (!TryParseCharmSpriteId(renderer.sprite.name, out id) || id < 1 || id > 40)
+                    continue;
+
+                GameObject root = FindSelectableRoot(renderer.gameObject, searchRoot.transform);
+                TryAddSlotCandidate(bestSlots, bestScores, id, root, null, 100);
+            }
+        }
+
         private static bool TryParseCharmSpriteId(string name, out int id)
         {
             id = 0;
             if (string.IsNullOrEmpty(name))
                 return false;
 
-            Match match = Regex.Match(name, @"(?:^|_)charm0*(\d+)(?:$|_)", RegexOptions.IgnoreCase);
+            Match match = Regex.Match(
+                name,
+                @"(?:^|[_\s-])charm[_\s-]*0*(\d+)(?:$|[_\s-])",
+                RegexOptions.IgnoreCase);
+            if (!match.Success)
+                match = Regex.Match(name, @"(?:^|_)charm0*(\d+)(?:$|_)", RegexOptions.IgnoreCase);
             return match.Success && int.TryParse(match.Groups[1].Value, out id);
-        }
-
-        private int ScoreGridRenderer(SpriteRenderer renderer)
-        {
-            int score = 0;
-            Transform current = renderer.transform;
-            while (current != null && current != _pane.transform)
-            {
-                Component[] components = current.GetComponents<Component>();
-                for (int i = 0; i < components.Length; i++)
-                {
-                    Component component = components[i];
-                    if (component == null)
-                        continue;
-
-                    string typeName = component.GetType().Name;
-                    if (typeName.IndexOf("Collider2D", StringComparison.OrdinalIgnoreCase) >= 0)
-                        score += 100;
-                    if (string.Equals(typeName, "PlayMakerFSM", StringComparison.Ordinal))
-                        score += 30;
-                }
-                current = current.parent;
-            }
-
-            string objectName = renderer.gameObject.name ?? string.Empty;
-            if (objectName.IndexOf("charm", StringComparison.OrdinalIgnoreCase) >= 0)
-                score += 20;
-
-            Vector3 paneLocal = _pane.transform.InverseTransformPoint(renderer.transform.position);
-            if (paneLocal.y < 1.2f)
-                score += 20;
-            return score;
         }
 
         private static GameObject FindSelectableRoot(GameObject icon, Transform pane)
@@ -713,12 +1130,132 @@ namespace CharmsEvolve.UI
 
                     string typeName = component.GetType().Name;
                     if (typeName.IndexOf("Collider2D", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                        string.Equals(typeName, "PlayMakerFSM", StringComparison.Ordinal))
+                        string.Equals(typeName, "PlayMakerFSM", StringComparison.Ordinal) ||
+                        string.Equals(typeName, "CharmItem", StringComparison.OrdinalIgnoreCase))
                         best = current.gameObject;
                 }
                 current = current.parent;
             }
             return best;
+        }
+
+        private void LogGridProbeDiagnostics()
+        {
+            if (_loggedGridDiagnostics && _built)
+                return;
+            _loggedGridDiagnostics = true;
+
+            Component[] items = CharmUtil.FindAllCharmItems();
+            List<string> samples = new List<string>();
+            int collectionCount = 0;
+            for (int i = 0; i < items.Length; i++)
+            {
+                Component item = items[i];
+                int id;
+                if (CharmUtil.TryGetCharmItemId(item, out id) && id >= 1 && id <= 42 &&
+                    item != null && item.gameObject != null)
+                {
+                    if (_gridRoot != null &&
+                        (item.gameObject == _gridRoot || item.transform.IsChildOf(_gridRoot.transform)))
+                        collectionCount++;
+
+                    if (samples.Count < 12)
+                    {
+                        SpriteRenderer renderer = ResolveCharmItemIcon(item.gameObject, item);
+                        samples.Add(id + "@" + CharmUtil.GetHierarchyPath(item.gameObject) +
+                            " sprite=" + (renderer == null || renderer.sprite == null ? "<none>" : renderer.sprite.name));
+                    }
+                }
+            }
+
+            List<int> missing = new List<int>();
+            for (int id = 1; id <= 40; id++)
+            {
+                if (!_slotByOriginalId.ContainsKey(id))
+                    missing.Add(id);
+            }
+
+            Plugin.Log.LogInfo(
+                "CharmItem probe: resources=" + items.Length +
+                ", under selected Charms root=" + collectionCount +
+                ", resolved slots=" + _slots.Count +
+                ", missing=" + (missing.Count == 0 ? "<none>" : string.Join(",", missing.ConvertAll(delegate(int value) { return value.ToString(); }).ToArray())) + ".");
+            for (int i = 0; i < samples.Count; i++)
+                Plugin.Log.LogDebug("CharmItem sample: " + samples[i]);
+
+            LogNativeFeedbackDiagnostics();
+        }
+
+        private void LogNativeFeedbackDiagnostics()
+        {
+            List<Component> fsms = GetFeedbackFsms();
+            List<string> fsmSummaries = new List<string>();
+            for (int i = 0; i < fsms.Count && fsmSummaries.Count < 16; i++)
+            {
+                Component fsm = fsms[i];
+                if (fsm == null)
+                    continue;
+
+                List<string> states = GetStateNames(fsm);
+                List<string> relevant = new List<string>();
+                for (int j = 0; j < states.Count; j++)
+                {
+                    string state = states[j];
+                    if (state.IndexOf("equip", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        state.IndexOf("charm", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        state.IndexOf("over", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        state.IndexOf("shake", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        state.IndexOf("bound", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        state.IndexOf("tween", StringComparison.OrdinalIgnoreCase) >= 0)
+                        relevant.Add(state);
+                }
+
+                if (relevant.Count > 0 || CharmUtil.GetFsmName(fsm).IndexOf("Charm", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    fsmSummaries.Add(
+                        CharmUtil.GetHierarchyPath(fsm.gameObject) + " :: " +
+                        CharmUtil.GetFsmName(fsm) + " [" +
+                        (relevant.Count == 0 ? "no matching states" : string.Join(",", relevant.ToArray())) + "]");
+                }
+            }
+
+            Plugin.Log.LogInfo("Charm UI FSM probe: candidates=" + fsms.Count +
+                ", relevant=" + fsmSummaries.Count + ".");
+            for (int i = 0; i < fsmSummaries.Count; i++)
+                Plugin.Log.LogInfo("Charm UI FSM: " + fsmSummaries[i]);
+
+            Slot sampleSlot = _slots.Count > 0 ? _slots[0] : null;
+            if (sampleSlot == null || sampleSlot.Root == null)
+                return;
+
+            Component[] components = sampleSlot.Root.GetComponentsInChildren<Component>(true);
+            List<string> methods = new List<string>();
+            for (int i = 0; i < components.Length; i++)
+            {
+                Component component = components[i];
+                if (component == null)
+                    continue;
+                string typeName = component.GetType().Name;
+                if (!string.Equals(typeName, "CharmItem", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(typeName, "CharmDisplay", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                MethodInfo[] candidates = component.GetType().GetMethods(
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                for (int j = 0; j < candidates.Length; j++)
+                {
+                    MethodInfo method = candidates[j];
+                    string name = method.Name ?? string.Empty;
+                    if (method.GetParameters().Length == 0 &&
+                        (name.IndexOf("equip", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                         name.IndexOf("anim", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                         name.IndexOf("effect", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                         name.IndexOf("select", StringComparison.OrdinalIgnoreCase) >= 0))
+                        methods.Add(typeName + "." + name);
+                }
+            }
+            if (methods.Count > 0)
+                Plugin.Log.LogInfo("CharmItem/CharmDisplay visual-method probe: " + string.Join(",", methods.ToArray()));
         }
 
         private void AssignGridCoordinates()
@@ -947,8 +1484,15 @@ namespace CharmsEvolve.UI
             if (slot == null || _page <= 0)
                 return null;
 
-            CopyKind kind = (CopyKind)(_page - 1);
-            return CharmDatabase.GetCopy(CharmKey.For(slot.OriginalId, kind));
+            int pageIndex = Mathf.Clamp(_page - 1, 0, 2);
+            int definitionId = slot.OriginalId;
+            if (definitionId == 36 && _showKingsoul[pageIndex])
+                definitionId = 42;
+            else if (definitionId == 40 && _showCarefreeMelody[pageIndex])
+                definitionId = 41;
+
+            CopyKind kind = (CopyKind)pageIndex;
+            return CharmDatabase.GetCopy(CharmKey.For(definitionId, kind));
         }
 
         private GameObject GetSelectedObject()
@@ -970,6 +1514,35 @@ namespace CharmsEvolve.UI
             {
                 if (_slots[i].Contains(selected))
                     return _slots[i];
+            }
+
+            // Some Unity 6 menu FSMs keep the selection on a slot-local CharmItem
+            // without exposing a global Item variable. Preserve the last grid slot
+            // only while the dedicated page selector is not selected.
+            return !_pageSelectorSelected ? _lastGridSlot : null;
+        }
+
+        private Slot GetSlotFromEventOwner(object eventOwner)
+        {
+            GameObject owner = CharmUtil.GetOwnerGameObject(eventOwner);
+            if (owner == null)
+                return null;
+
+            for (int i = 0; i < _slots.Count; i++)
+            {
+                Slot slot = _slots[i];
+                if (slot != null && slot.Contains(owner))
+                    return slot;
+            }
+
+            Transform current = owner.transform;
+            for (int depth = 0; current != null && depth < 8; depth++, current = current.parent)
+            {
+                int id;
+                Slot slot;
+                if (int.TryParse(current.gameObject.name, out id) &&
+                    _slotByOriginalId.TryGetValue(id, out slot))
+                    return slot;
             }
             return null;
         }
@@ -998,11 +1571,12 @@ namespace CharmsEvolve.UI
                     continue;
 
                 string name = collider.gameObject.name ?? string.Empty;
-                Vector3 local = _pane.transform.InverseTransformPoint(collider.transform.position);
-                if (local.y <= PageSelectorPosition.y)
+                Vector3 world = collider.transform.position;
+                if (world.y <= _resolvedPageSelectorPosition.y)
                     continue;
 
-                float score = Mathf.Abs(local.x - PageSelectorPosition.x) + Mathf.Abs(local.y - 2.5f);
+                float score = Mathf.Abs(world.x - _resolvedPageSelectorPosition.x) +
+                              Mathf.Abs(world.y - (_resolvedPageSelectorPosition.y + 1.1f));
                 if (name.IndexOf("equip", StringComparison.OrdinalIgnoreCase) >= 0)
                     score -= 5f;
                 if (name.IndexOf("charm", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -1017,22 +1591,105 @@ namespace CharmsEvolve.UI
             return best;
         }
 
+        private Vector3 ResolvePageSelectorPosition()
+        {
+            if (_slots.Count == 0)
+                return PageSelectorPosition;
+
+            float minX = float.PositiveInfinity;
+            float maxX = float.NegativeInfinity;
+            float maxY = float.NegativeInfinity;
+            float minZ = float.PositiveInfinity;
+            List<float> xs = new List<float>();
+            List<float> ys = new List<float>();
+            for (int i = 0; i < _slots.Count; i++)
+            {
+                Slot slot = _slots[i];
+                if (slot == null || slot.Root == null)
+                    continue;
+
+                Vector3 position = slot.Root.transform.position;
+                minX = Mathf.Min(minX, position.x);
+                maxX = Mathf.Max(maxX, position.x);
+                maxY = Mathf.Max(maxY, position.y);
+                minZ = Mathf.Min(minZ, position.z);
+                AddDistinctCoordinate(xs, position.x);
+                AddDistinctCoordinate(ys, position.y);
+            }
+
+            if (float.IsInfinity(maxX) || float.IsInfinity(maxY))
+                return PageSelectorPosition;
+
+            xs.Sort();
+            ys.Sort();
+            float xStep = FindSmallestCoordinateStep(xs, 0.70f);
+            float yStep = FindSmallestCoordinateStep(ys, 0.70f);
+
+            // Place the selector just above the upper-right edge of the live 40-slot
+            // collection, matching CharmPreset's visual role without relying on a
+            // Unity-5-specific local coordinate.
+            float x = maxX + xStep * 0.55f;
+            float y = maxY + yStep * 0.78f;
+            float z = float.IsInfinity(minZ) ? PageSelectorPosition.z : minZ - 0.03f;
+            Vector3 resolved = new Vector3(x, y, z);
+            Plugin.Log.LogDebug(
+                "Resolved charm page selector from live grid bounds: " + resolved +
+                " (grid x=" + minX + ".." + maxX + ", maxY=" + maxY + ").");
+            return resolved;
+        }
+
+        private static void AddDistinctCoordinate(List<float> values, float value)
+        {
+            for (int i = 0; i < values.Count; i++)
+            {
+                if (Mathf.Abs(values[i] - value) < 0.08f)
+                    return;
+            }
+            values.Add(value);
+        }
+
+        private static float FindSmallestCoordinateStep(List<float> values, float fallback)
+        {
+            float best = float.PositiveInfinity;
+            for (int i = 1; i < values.Count; i++)
+            {
+                float delta = Mathf.Abs(values[i] - values[i - 1]);
+                if (delta > 0.08f && delta < best)
+                    best = delta;
+            }
+            return float.IsInfinity(best) ? fallback : best;
+        }
+
         private void BuildPageSelector()
         {
-            Transform existing = _pane.transform.Find("CharmsEvolve Page Selector");
+            Transform existing = FindNamedTransform(_pane.transform, "CharmsEvolve Page Selector", 8);
             if (existing != null)
                 _pageSelector = existing.gameObject;
             else
             {
-                _pageSelector = new GameObject("CharmsEvolve Page Selector");
-                _pageSelector.transform.SetParent(_pane.transform, false);
+                GameObject template = FindNativePageSelectorTemplate();
+                if (template != null)
+                {
+                    _pageSelector = UnityEngine.Object.Instantiate(template);
+                    _pageSelector.name = "CharmsEvolve Page Selector";
+                    PrepareClonedPageSelector(_pageSelector);
+                    Plugin.Log.LogInfo("Created the page selector from native CharmItem template: " +
+                        CharmUtil.GetHierarchyPath(template) + ".");
+                }
+                else
+                {
+                    _pageSelector = new GameObject("CharmsEvolve Page Selector");
+                    Plugin.Log.LogWarning("No native Next Dot/CharmItem selector template was found; using a SpriteRenderer + Collider2D fallback.");
+                }
+                _pageSelector.transform.SetParent(_pane.transform, true);
             }
 
+            _pageSelector.SetActive(true);
             _pageSelector.layer = ResolveUiLayer();
-            _pageSelector.transform.position = PageSelectorPosition;
+            _pageSelector.transform.position = _resolvedPageSelectorPosition;
             _pageSelector.transform.localScale = Vector3.one;
 
-            _pageSelectorRenderer = _pageSelector.GetComponent<SpriteRenderer>();
+            _pageSelectorRenderer = ResolveSelectorRenderer(_pageSelector);
             if (_pageSelectorRenderer == null)
                 _pageSelectorRenderer = _pageSelector.AddComponent<SpriteRenderer>();
 
@@ -1040,6 +1697,8 @@ namespace CharmsEvolve.UI
             if (colliderType != null)
             {
                 _pageSelectorCollider = _pageSelector.GetComponent(colliderType);
+                if (_pageSelectorCollider == null)
+                    _pageSelectorCollider = FindComponentInChildrenByType(_pageSelector, colliderType);
                 if (_pageSelectorCollider == null)
                     _pageSelectorCollider = _pageSelector.AddComponent(colliderType);
                 CharmUtil.TrySetMember(_pageSelectorCollider, "size", PageSelectorColliderSize);
@@ -1062,6 +1721,116 @@ namespace CharmsEvolve.UI
             UpdatePageSelectorSprite();
         }
 
+        private static Transform FindNamedTransform(Transform root, string name, int maxDepth)
+        {
+            if (root == null || maxDepth < 0)
+                return null;
+            if (string.Equals(root.gameObject.name, name, StringComparison.Ordinal))
+                return root;
+
+            for (int i = 0; i < root.childCount; i++)
+            {
+                Transform found = FindNamedTransform(root.GetChild(i), name, maxDepth - 1);
+                if (found != null)
+                    return found;
+            }
+            return null;
+        }
+
+        private static GameObject FindNativePageSelectorTemplate()
+        {
+            Component[] items = CharmUtil.FindAllCharmItems();
+            GameObject best = null;
+            int bestScore = int.MinValue;
+            for (int i = 0; i < items.Length; i++)
+            {
+                Component item = items[i];
+                if (item == null || item.gameObject == null)
+                    continue;
+
+                int numericId;
+                if (int.TryParse(item.gameObject.name, out numericId))
+                    continue;
+
+                string name = item.gameObject.name ?? string.Empty;
+                string path = CharmUtil.GetHierarchyPath(item.gameObject);
+                int score = 0;
+                if (name.IndexOf("Next Dot", StringComparison.OrdinalIgnoreCase) >= 0)
+                    score += 500;
+                if (name.IndexOf("dot", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    name.IndexOf("page", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    name.IndexOf("next", StringComparison.OrdinalIgnoreCase) >= 0)
+                    score += 180;
+                if (path.IndexOf("Equipped Charms", StringComparison.OrdinalIgnoreCase) >= 0)
+                    score += 100;
+                if (item.gameObject.GetComponent<SpriteRenderer>() != null ||
+                    item.gameObject.GetComponentInChildren<SpriteRenderer>(true) != null)
+                    score += 40;
+                Component[] components = item.gameObject.GetComponentsInChildren<Component>(true);
+                for (int j = 0; j < components.Length; j++)
+                {
+                    Component component = components[j];
+                    if (component != null && string.Equals(component.GetType().Name, "PlayMakerFSM", StringComparison.Ordinal))
+                    {
+                        score += 80;
+                        break;
+                    }
+                }
+
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    best = item.gameObject;
+                }
+            }
+            return bestScore >= 180 ? best : null;
+        }
+
+        private static void PrepareClonedPageSelector(GameObject clone)
+        {
+            if (clone == null)
+                return;
+
+            Component[] components = clone.GetComponentsInChildren<Component>(true);
+            for (int i = 0; i < components.Length; i++)
+            {
+                Component component = components[i];
+                if (component == null)
+                    continue;
+
+                string typeName = component.GetType().Name;
+                if ((string.Equals(typeName, "CharmItem", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(typeName, "CharmDisplay", StringComparison.OrdinalIgnoreCase)) &&
+                    component is Behaviour)
+                    ((Behaviour)component).enabled = false;
+            }
+
+            SpriteRenderer primary = ResolveSelectorRenderer(clone);
+            SpriteRenderer[] renderers = clone.GetComponentsInChildren<SpriteRenderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                if (renderers[i] != null && renderers[i] != primary)
+                    renderers[i].enabled = false;
+            }
+        }
+
+        private static SpriteRenderer ResolveSelectorRenderer(GameObject selector)
+        {
+            if (selector == null)
+                return null;
+            SpriteRenderer direct = selector.GetComponent<SpriteRenderer>();
+            if (direct != null)
+                return direct;
+
+            SpriteRenderer[] renderers = selector.GetComponentsInChildren<SpriteRenderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                if (renderers[i] != null && renderers[i].sprite != null)
+                    return renderers[i];
+            }
+            return renderers.Length > 0 ? renderers[0] : null;
+        }
+
         private static Type ResolveBoxCollider2DType()
         {
             Type type = AccessTools.TypeByName("UnityEngine.BoxCollider2D");
@@ -1069,6 +1838,20 @@ namespace CharmsEvolve.UI
                 return type;
 
             return Type.GetType("UnityEngine.BoxCollider2D, UnityEngine.Physics2DModule", false);
+        }
+
+        private static Component FindComponentInChildrenByType(GameObject root, Type type)
+        {
+            if (root == null || type == null)
+                return null;
+            Component[] components = root.GetComponentsInChildren<Component>(true);
+            for (int i = 0; i < components.Length; i++)
+            {
+                Component component = components[i];
+                if (component != null && type.IsInstanceOfType(component))
+                    return component;
+            }
+            return null;
         }
 
         private static bool IsCollider2DComponent(Component component)
@@ -1165,6 +1948,78 @@ namespace CharmsEvolve.UI
             }
         }
 
+        private void CaptureDescriptionTypography()
+        {
+            if (_descriptionText == null || _descriptionTypographyCaptured)
+                return;
+
+            object value;
+            _originalDescriptionFontSize = ReadFloatMember(_descriptionText, "fontSize", 0f);
+            _originalDescriptionFontSizeMin = ReadFloatMember(_descriptionText, "fontSizeMin", 0f);
+            _originalDescriptionFontSizeMax = ReadFloatMember(_descriptionText, "fontSizeMax", _originalDescriptionFontSize);
+            if (CharmUtil.TryGetMember(_descriptionText, "enableAutoSizing", out value) && value != null)
+            {
+                try { _originalDescriptionAutoSizing = Convert.ToBoolean(value); }
+                catch { _originalDescriptionAutoSizing = false; }
+            }
+            _descriptionTypographyCaptured = true;
+        }
+
+        private static float ReadFloatMember(object target, string name, float fallback)
+        {
+            object value;
+            if (!CharmUtil.TryGetMember(target, name, out value) || value == null)
+                return fallback;
+            try { return Convert.ToSingle(value); }
+            catch { return fallback; }
+        }
+
+        private void ApplyExtendedDescriptionTypography(string text)
+        {
+            if (_descriptionText == null)
+                return;
+            CaptureDescriptionTypography();
+            if (!_descriptionTypographyCaptured || _originalDescriptionFontSize <= 0f)
+                return;
+
+            int length = string.IsNullOrEmpty(text) ? 0 : text.Length;
+            float scale = 1f;
+            if (length > 520)
+                scale = 0.62f;
+            else if (length > 400)
+                scale = 0.70f;
+            else if (length > 300)
+                scale = 0.78f;
+            else if (length > 210)
+                scale = 0.88f;
+
+            float size = Mathf.Max(10f, _originalDescriptionFontSize * scale);
+            float minimum = _originalDescriptionFontSizeMin > 0f
+                ? Mathf.Min(_originalDescriptionFontSizeMin, size)
+                : Mathf.Max(8f, _originalDescriptionFontSize * 0.52f);
+
+            CharmUtil.TrySetMember(_descriptionText, "enableAutoSizing", true);
+            CharmUtil.TrySetMember(_descriptionText, "fontSizeMax", _originalDescriptionFontSizeMax > 0f
+                ? Mathf.Min(_originalDescriptionFontSizeMax, size)
+                : size);
+            CharmUtil.TrySetMember(_descriptionText, "fontSizeMin", minimum);
+            CharmUtil.TrySetMember(_descriptionText, "fontSize", size);
+        }
+
+        private void RestoreDescriptionTypography()
+        {
+            if (_descriptionText == null || !_descriptionTypographyCaptured)
+                return;
+
+            CharmUtil.TrySetMember(_descriptionText, "enableAutoSizing", _originalDescriptionAutoSizing);
+            if (_originalDescriptionFontSize > 0f)
+                CharmUtil.TrySetMember(_descriptionText, "fontSize", _originalDescriptionFontSize);
+            if (_originalDescriptionFontSizeMin > 0f)
+                CharmUtil.TrySetMember(_descriptionText, "fontSizeMin", _originalDescriptionFontSizeMin);
+            if (_originalDescriptionFontSizeMax > 0f)
+                CharmUtil.TrySetMember(_descriptionText, "fontSizeMax", _originalDescriptionFontSizeMax);
+        }
+
         private bool IsGridIcon(SpriteRenderer renderer)
         {
             for (int i = 0; i < _slots.Count; i++)
@@ -1247,6 +2102,11 @@ namespace CharmsEvolve.UI
                 }
             }
 
+            if (slot != null && slot.OriginalId == 36)
+                description += "\n\n操作：轻按确认键装卸；按住确认键切换虚空之心／国王之魂。";
+            else if (slot != null && slot.OriginalId == 40)
+                description += "\n\n操作：轻按确认键装卸；按住确认键切换格林之子／无忧旋律。";
+
             if (Time.unscaledTime < _statusUntil && !string.IsNullOrEmpty(_status))
                 description += "\n\n" + _status;
 
@@ -1258,6 +2118,7 @@ namespace CharmsEvolve.UI
 
             SetText(_nameText, title);
             SetText(_descriptionText, description);
+            ApplyExtendedDescriptionTypography(description);
 
             if (_detailIcon != null)
             {
@@ -1284,7 +2145,10 @@ namespace CharmsEvolve.UI
 
             string addition = BuildVanillaAdjustmentText(definition);
             if (string.IsNullOrEmpty(addition))
+            {
+                RestoreDescriptionTypography();
                 return;
+            }
 
             string title = GetText(_nameText);
             string merged = nativeDescription + VanillaDescriptionMarker + "\n" + addition;
@@ -1293,23 +2157,24 @@ namespace CharmsEvolve.UI
             CharmsEvolveApi.RaiseBuildCharmDescription(context);
             SetText(_nameText, context.Title);
             SetText(_descriptionText, context.Description);
+            ApplyExtendedDescriptionTypography(context.Description);
         }
 
         private static string BuildVanillaAdjustmentText(BaseCharmDefinition definition)
         {
             List<string> lines = new List<string>();
             if (!string.IsNullOrEmpty(definition.EnhancedSynergy))
-                lines.Add("强化联动：" + definition.EnhancedSynergy);
+                lines.Add("（与相关护符联动：" + definition.EnhancedSynergy + "）");
             if (!string.IsNullOrEmpty(definition.VoidKnight))
-                lines.Add("形态联动：" + definition.VoidKnight);
+                lines.Add("（形态联动：" + definition.VoidKnight + "）");
             if (!string.IsNullOrEmpty(definition.LegacyEnhancement))
-                lines.Add("额外效果：" + definition.LegacyEnhancement);
+                lines.Add("（Charms Evolve 调整：" + definition.LegacyEnhancement + "）");
             if (definition.StackableSynergies != null)
             {
                 for (int i = 0; i < definition.StackableSynergies.Length; i++)
                 {
                     if (!string.IsNullOrEmpty(definition.StackableSynergies[i]))
-                        lines.Add("可叠加联动：" + definition.StackableSynergies[i]);
+                        lines.Add("（可叠加联动：" + definition.StackableSynergies[i] + "）");
                 }
             }
             return string.Join("\n", lines.ToArray());
@@ -1317,6 +2182,7 @@ namespace CharmsEvolve.UI
 
         private void CaptureNativeDetails()
         {
+            CaptureDescriptionTypography();
             _originalName = GetText(_nameText);
             _originalDescription = GetText(_descriptionText);
             if (_detailIcon != null)
@@ -1335,6 +2201,7 @@ namespace CharmsEvolve.UI
 
             SetText(_nameText, _originalName);
             SetText(_descriptionText, _originalDescription);
+            RestoreDescriptionTypography();
             if (_detailIcon != null)
             {
                 _detailIcon.sprite = _originalDetailSprite;
@@ -1461,7 +2328,7 @@ namespace CharmsEvolve.UI
                 ? new[] { "Tween Up", "Equip Charm", "Equip" }
                 : new[] { "Tween Down", "Unequip Charm", "Unequip" };
 
-            bool replayed = false;
+            bool replayed = TryInvokeNativeCharmVisualMethod(slot, equipping);
             for (int i = 0; i < stateNames.Length && !replayed; i++)
                 replayed = TryInvokeNativeFeedbackActions(stateNames[i]);
 
@@ -1504,44 +2371,120 @@ namespace CharmsEvolve.UI
                 TryInvokeNativeAudioAction("Bound Reminder", 0);
         }
 
-        private bool TryInvokeNativeFeedbackActions(string stateName)
+        private bool TryInvokeNativeCharmVisualMethod(Slot slot, bool equipping)
         {
-            IList actions = GetStateActions(stateName);
-            if (actions == null || actions.Count == 0)
+            if (slot == null || slot.Root == null)
                 return false;
 
-            bool invoked = false;
-            for (int i = 0; i < actions.Count; i++)
+            Component[] components = slot.Root.GetComponentsInChildren<Component>(true);
+            string verb = equipping ? "equip" : "unequip";
+            for (int i = 0; i < components.Length; i++)
             {
-                object action = actions[i];
-                if (action == null)
+                Component component = components[i];
+                if (component == null)
                     continue;
 
-                string typeName = action.GetType().Name;
-                if (!IsSafeNativeFeedbackAction(typeName))
+                string componentName = component.GetType().Name;
+                if (!string.Equals(componentName, "CharmDisplay", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(componentName, "CharmItem", StringComparison.OrdinalIgnoreCase))
                     continue;
 
-                MethodInfo onEnter = action.GetType().GetMethod(
-                    "OnEnter",
-                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-                    null,
-                    Type.EmptyTypes,
-                    null);
-                if (onEnter == null)
-                    continue;
-
-                try
+                MethodInfo[] methods = component.GetType().GetMethods(
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                for (int j = 0; j < methods.Length; j++)
                 {
-                    onEnter.Invoke(action, null);
-                    invoked = true;
-                }
-                catch (Exception ex)
-                {
-                    Plugin.Log.LogDebug("Native feedback action " + typeName + " failed: " + ex.Message);
+                    MethodInfo method = methods[j];
+                    string methodName = method.Name ?? string.Empty;
+                    if (method.GetParameters().Length != 0 || method.ReturnType != typeof(void))
+                        continue;
+                    if (methodName.IndexOf(verb, StringComparison.OrdinalIgnoreCase) < 0)
+                        continue;
+                    if (methodName.IndexOf("play", StringComparison.OrdinalIgnoreCase) < 0 &&
+                        methodName.IndexOf("anim", StringComparison.OrdinalIgnoreCase) < 0 &&
+                        methodName.IndexOf("effect", StringComparison.OrdinalIgnoreCase) < 0 &&
+                        methodName.IndexOf("feedback", StringComparison.OrdinalIgnoreCase) < 0)
+                        continue;
+
+                    try
+                    {
+                        method.Invoke(component, null);
+                        Plugin.Log.LogDebug("Invoked native " + componentName + "." + methodName + " for " + verb + " feedback.");
+                        return true;
+                    }
+                    catch (Exception ex)
+                    {
+                        Plugin.Log.LogDebug("Native charm visual method " + methodName + " failed: " + ex.Message);
+                    }
                 }
             }
+            return false;
+        }
 
+        private bool TryInvokeNativeFeedbackActions(string stateName)
+        {
+            List<Component> fsms = GetFeedbackFsms();
+            bool invoked = false;
+            for (int f = 0; f < fsms.Count; f++)
+            {
+                IList actions = GetStateActions(fsms[f], stateName);
+                if (actions == null || actions.Count == 0)
+                    continue;
+
+                for (int i = 0; i < actions.Count; i++)
+                {
+                    object action = actions[i];
+                    if (action == null)
+                        continue;
+
+                    string typeName = action.GetType().Name;
+                    if (!IsSafeNativeFeedbackAction(typeName))
+                        continue;
+
+                    MethodInfo onEnter = action.GetType().GetMethod(
+                        "OnEnter",
+                        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                        null,
+                        Type.EmptyTypes,
+                        null);
+                    if (onEnter == null)
+                        continue;
+
+                    try
+                    {
+                        onEnter.Invoke(action, null);
+                        invoked = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        Plugin.Log.LogDebug("Native feedback action " + typeName + " failed: " + ex.Message);
+                    }
+                }
+            }
             return invoked;
+        }
+
+        private bool TryInvokeNativeFeedbackStateByFragments(string[] fragments)
+        {
+            if (fragments == null || fragments.Length == 0)
+                return false;
+
+            List<Component> fsms = GetFeedbackFsms();
+            for (int f = 0; f < fsms.Count; f++)
+            {
+                List<string> names = GetStateNames(fsms[f]);
+                for (int i = 0; i < names.Count; i++)
+                {
+                    string name = names[i];
+                    for (int j = 0; j < fragments.Length; j++)
+                    {
+                        if (name.IndexOf(fragments[j], StringComparison.OrdinalIgnoreCase) < 0)
+                            continue;
+                        if (TryInvokeNativeFeedbackActions(name))
+                            return true;
+                    }
+                }
+            }
+            return false;
         }
 
         private static bool IsSafeNativeFeedbackAction(string typeName)
@@ -1571,18 +2514,22 @@ namespace CharmsEvolve.UI
 
         private bool TryInvokeNativeAudioAction(string stateName, int preferredIndex)
         {
-            IList actions = GetStateActions(stateName);
-            if (actions == null || actions.Count == 0)
-                return false;
-
-            if (preferredIndex >= 0 && preferredIndex < actions.Count &&
-                TryInvokeActionIfAudio(actions[preferredIndex]))
-                return true;
-
-            for (int i = 0; i < actions.Count; i++)
+            List<Component> fsms = GetFeedbackFsms();
+            for (int f = 0; f < fsms.Count; f++)
             {
-                if (TryInvokeActionIfAudio(actions[i]))
+                IList actions = GetStateActions(fsms[f], stateName);
+                if (actions == null || actions.Count == 0)
+                    continue;
+
+                if (preferredIndex >= 0 && preferredIndex < actions.Count &&
+                    TryInvokeActionIfAudio(actions[preferredIndex]))
                     return true;
+
+                for (int i = 0; i < actions.Count; i++)
+                {
+                    if (TryInvokeActionIfAudio(actions[i]))
+                        return true;
+                }
             }
             return false;
         }
@@ -1613,14 +2560,38 @@ namespace CharmsEvolve.UI
             }
         }
 
-        private IList GetStateActions(string stateName)
+        private List<Component> GetFeedbackFsms()
         {
-            if (_uiCharmsFsm == null || string.IsNullOrEmpty(stateName))
+            List<Component> result = new List<Component>();
+            AddUniqueFsm(result, _uiCharmsFsm);
+            AddUniqueFsm(result, _updateCursorFsm);
+
+            GameObject root = _pane ?? _gridRoot;
+            if (root != null)
+            {
+                Component[] components = root.GetComponentsInChildren<Component>(true);
+                for (int i = 0; i < components.Length; i++)
+                    AddUniqueFsm(result, components[i]);
+            }
+            return result;
+        }
+
+        private static void AddUniqueFsm(List<Component> result, Component component)
+        {
+            if (component == null || result.Contains(component) ||
+                !string.Equals(component.GetType().Name, "PlayMakerFSM", StringComparison.Ordinal))
+                return;
+            result.Add(component);
+        }
+
+        private static IList GetStateActions(Component fsmComponent, string stateName)
+        {
+            if (fsmComponent == null || string.IsNullOrEmpty(stateName))
                 return null;
 
             object fsm;
-            if (!CharmUtil.TryGetMember(_uiCharmsFsm, "Fsm", out fsm) || fsm == null)
-                return null;
+            if (!CharmUtil.TryGetMember(fsmComponent, "Fsm", out fsm) || fsm == null)
+                fsm = fsmComponent;
 
             object statesValue;
             if (!(CharmUtil.TryGetMember(fsm, "States", out statesValue) ||
@@ -1634,7 +2605,8 @@ namespace CharmsEvolve.UI
             foreach (object state in states)
             {
                 object nameValue;
-                if (!CharmUtil.TryGetMember(state, "Name", out nameValue) ||
+                if (!(CharmUtil.TryGetMember(state, "Name", out nameValue) ||
+                      CharmUtil.TryGetMember(state, "name", out nameValue)) ||
                     !string.Equals(nameValue == null ? string.Empty : nameValue.ToString(), stateName, StringComparison.Ordinal))
                     continue;
 
@@ -1643,7 +2615,89 @@ namespace CharmsEvolve.UI
                     CharmUtil.TryGetMember(state, "actions", out actionsValue))
                     return actionsValue as IList;
             }
+            return null;
+        }
 
+        private static List<string> GetStateNames(Component fsmComponent)
+        {
+            List<string> result = new List<string>();
+            if (fsmComponent == null)
+                return result;
+
+            object fsm;
+            if (!CharmUtil.TryGetMember(fsmComponent, "Fsm", out fsm) || fsm == null)
+                fsm = fsmComponent;
+
+            object statesValue;
+            if (!(CharmUtil.TryGetMember(fsm, "States", out statesValue) ||
+                  CharmUtil.TryGetMember(fsm, "states", out statesValue)))
+                return result;
+
+            IEnumerable states = statesValue as IEnumerable;
+            if (states == null)
+                return result;
+
+            foreach (object state in states)
+            {
+                object nameValue;
+                if (!(CharmUtil.TryGetMember(state, "Name", out nameValue) ||
+                      CharmUtil.TryGetMember(state, "name", out nameValue)) || nameValue == null)
+                    continue;
+                string name = nameValue.ToString();
+                if (!string.IsNullOrEmpty(name) && !result.Contains(name))
+                    result.Add(name);
+            }
+            return result;
+        }
+
+        private static Component FindFsmAround(GameObject root, string fsmName)
+        {
+            if (root == null)
+                return null;
+
+            Component found = FindFsmInChildren(root, fsmName);
+            if (found != null)
+                return found;
+
+            Transform current = root.transform.parent;
+            for (int depth = 0; current != null && depth < 6; depth++, current = current.parent)
+            {
+                Component[] components = current.GetComponents<Component>();
+                for (int i = 0; i < components.Length; i++)
+                {
+                    Component component = components[i];
+                    if (component == null || !string.Equals(component.GetType().Name, "PlayMakerFSM", StringComparison.Ordinal))
+                        continue;
+                    if (string.Equals(CharmUtil.GetFsmName(component), fsmName, StringComparison.Ordinal))
+                        return component;
+                }
+            }
+            return null;
+        }
+
+        private static object FindComponentByTypeNameAround(GameObject root, string typeName)
+        {
+            if (root == null)
+                return null;
+
+            Transform current = root.transform;
+            for (int depth = 0; current != null && depth < 8; depth++, current = current.parent)
+            {
+                object direct = FindComponentByTypeName(current.gameObject, typeName);
+                if (direct != null)
+                    return direct;
+
+                if (depth == 0)
+                {
+                    Component[] descendants = current.gameObject.GetComponentsInChildren<Component>(true);
+                    for (int i = 0; i < descendants.Length; i++)
+                    {
+                        Component component = descendants[i];
+                        if (component != null && string.Equals(component.GetType().Name, typeName, StringComparison.Ordinal))
+                            return component;
+                    }
+                }
+            }
             return null;
         }
 
@@ -1692,6 +2746,7 @@ namespace CharmsEvolve.UI
             _slots.Clear();
             _slotByOriginalId.Clear();
             _pane = null;
+            _gridRoot = null;
             _uiCharmsFsm = null;
             _updateCursorFsm = null;
             _nameText = null;
@@ -1702,6 +2757,14 @@ namespace CharmsEvolve.UI
             _pageSelectorRenderer = null;
             _pageSelectorCollider = null;
             _pageSelectorSelected = false;
+            _lastGridSlot = null;
+            _descriptionTypographyCaptured = false;
+            _originalDescriptionFontSize = 0f;
+            _originalDescriptionFontSizeMin = 0f;
+            _originalDescriptionFontSizeMax = 0f;
+            _originalDescriptionAutoSizing = false;
+            _detailSnapshotValid = false;
+            _resolvedPageSelectorPosition = PageSelectorPosition;
         }
     }
 }

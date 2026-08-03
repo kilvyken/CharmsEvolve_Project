@@ -19,6 +19,8 @@ namespace CharmsEvolve.Interop
         private static Type _heroControllerType;
         private static Type _inventoryManagerType;
         private static bool _inventoryManagerTypeResolved;
+        private static Type _inputHandlerType;
+        private static bool _inputHandlerTypeResolved;
 
         private static UnityEngine.Object _inventoryObject;
         private static float _inventoryProbeAt;
@@ -322,6 +324,67 @@ namespace CharmsEvolve.Interop
             return false;
         }
 
+
+        /// <summary>
+        /// Reads the game's menu-confirm action without a compile-time InControl dependency.
+        /// Unity 6 builds still expose InputHandler/inputActions in most revisions; keyboard,
+        /// legacy Submit and joystick button 0 are conservative fallbacks for test builds.
+        /// </summary>
+        public static bool IsMenuSubmitPressed(out bool sourceResolved)
+        {
+            sourceResolved = false;
+            try
+            {
+                object inputHandler = GetSingleton(ResolveInputHandlerTypeQuietly());
+                if (inputHandler != null)
+                {
+                    object actions;
+                    if (TryGetMember(inputHandler, "inputActions", out actions) ||
+                        TryGetMember(inputHandler, "InputActions", out actions) ||
+                        TryGetMember(inputHandler, "actions", out actions))
+                    {
+                        object submit;
+                        if (actions != null &&
+                            (TryGetMember(actions, "menuSubmit", out submit) ||
+                             TryGetMember(actions, "MenuSubmit", out submit) ||
+                             TryGetMember(actions, "submit", out submit) ||
+                             TryGetMember(actions, "Submit", out submit)))
+                        {
+                            bool pressed;
+                            if (TryReadActionPressed(submit, out pressed))
+                            {
+                                sourceResolved = true;
+                                return pressed;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogDebug("Menu submit reflection probe failed: " + ex.Message);
+            }
+
+            try
+            {
+                bool legacySubmit = false;
+                try { legacySubmit = Input.GetButton("Submit"); }
+                catch { /* Unity 6 projects may omit the legacy Submit axis. */ }
+
+                sourceResolved = true;
+                return legacySubmit ||
+                       Input.GetKey(KeyCode.Return) ||
+                       Input.GetKey(KeyCode.KeypadEnter) ||
+                       Input.GetKey(KeyCode.Space) ||
+                       Input.GetKey(KeyCode.JoystickButton0);
+            }
+            catch
+            {
+                sourceResolved = false;
+                return false;
+            }
+        }
+
         public static bool AddSoul(int amount)
         {
             if (amount <= 0)
@@ -523,6 +586,92 @@ namespace CharmsEvolve.Interop
             }
 
             return null;
+        }
+
+
+        private static Type ResolveInputHandlerTypeQuietly()
+        {
+            if (_inputHandlerTypeResolved)
+                return _inputHandlerType;
+
+            _inputHandlerTypeResolved = true;
+            Assembly[] assemblies = AppDomain.CurrentDomain.GetAssemblies();
+            string[] names = { "InputHandler", "GameInputHandler", "UIInputHandler" };
+            for (int i = 0; i < assemblies.Length; i++)
+            {
+                Assembly assembly = assemblies[i];
+                if (assembly == null)
+                    continue;
+                for (int j = 0; j < names.Length; j++)
+                {
+                    Type candidate = assembly.GetType(names[j], false);
+                    if (candidate != null)
+                    {
+                        _inputHandlerType = candidate;
+                        return _inputHandlerType;
+                    }
+                }
+            }
+
+            for (int i = 0; i < assemblies.Length; i++)
+            {
+                Type[] types = GetLoadableTypes(assemblies[i]);
+                for (int j = 0; j < types.Length; j++)
+                {
+                    Type candidate = types[j];
+                    if (candidate == null)
+                        continue;
+                    if (string.Equals(candidate.Name, "InputHandler", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _inputHandlerType = candidate;
+                        return _inputHandlerType;
+                    }
+                }
+            }
+            return null;
+        }
+
+        private static bool TryReadActionPressed(object action, out bool pressed)
+        {
+            pressed = false;
+            if (action == null)
+                return false;
+
+            object value;
+            string[] members = { "IsPressed", "isPressed", "Pressed", "pressed" };
+            for (int i = 0; i < members.Length; i++)
+            {
+                if (!TryGetMember(action, members[i], out value) || value == null)
+                    continue;
+                try
+                {
+                    pressed = Convert.ToBoolean(value);
+                    return true;
+                }
+                catch
+                {
+                    // Try a method below.
+                }
+            }
+
+            MethodInfo method = action.GetType().GetMethod(
+                "IsPressed",
+                AnyInstance,
+                null,
+                Type.EmptyTypes,
+                null);
+            if (method == null)
+                return false;
+
+            try
+            {
+                pressed = Convert.ToBoolean(method.Invoke(action, null));
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static Type ResolveInventoryManagerTypeQuietly()

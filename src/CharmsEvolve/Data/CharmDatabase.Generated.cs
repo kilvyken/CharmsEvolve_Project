@@ -7,7 +7,7 @@ namespace CharmsEvolve.Data
 {
     /// <summary>
     /// 由 Design/hollowKnight_CharmsEvolve.xlsx 生成。
-    /// 40 个原版槽位 × 3 个复制形态 = 120 个自定义护符。
+    /// 40 个原版槽位 × 3 个复制形态，加上无忧旋律/国王之魂的 6 个可切换形态 = 126 个自定义护符。
     /// </summary>
     public static class CharmDatabase
     {
@@ -55,11 +55,20 @@ namespace CharmsEvolve.Data
             new BaseCharmDefinition(40, "格林之子", "Grimmchild", "火球攻击，5 → 11 伤害（随阶段）", "", 2, 1, "41", "", "", "2级格林之子", "无忧旋律 Carefree Melody", "3级格林之子", new string[] {  })
         };
 
+        // 41/42 are stable copy-only identities. The vanilla page still resolves the
+        // live 36/40 form from PlayerData, while custom pages switch between both forms
+        // explicitly by holding CONFIRM on slot 36 or 40.
+        private static readonly BaseCharmDefinition CarefreeMelodyDefinition =
+            new BaseCharmDefinition(41, "无忧旋律", "Carefree Melody", "在受伤时按照概率抵挡伤害一次，没受伤0％10％20％30％50％70％80％，第7次90％。触发效果重置受伤害次数，但回血、坐椅子和进出梦境不重置该次数", "", 2, 1, "无忧旋律：所有格林之子伤害*2", "", "乔尼的祝福：抵消伤害时获得 1 点生命血；若同时装备易碎心脏/不屈心脏且已获得生命血核心，额外获得 1 点生命血", "在受伤时按照概率抵挡伤害一次，没受伤0％10％20％30％50％70％80％，第7次90％。触发效果重置受伤害次数，但回血、坐椅子和进出梦境不重置该次数", "在受伤时按照概率抵挡伤害一次，没受伤0％10％20％30％50％70％80％，第7次90％。触发效果重置受伤害次数，但回血、坐椅子和进出梦境不重置该次数", "在受伤时按照概率抵挡伤害一次，没受伤0％10％20％30％50％70％80％，第7次90％。触发效果重置受伤害次数，但回血、坐椅子和进出梦境不重置该次数", new string[] { "多一段判定，叠加判断", "概率叠加，第一次受伤概率=0.81，第二次＝0.64，第三次=0.49，第四次=0.25，第5次=0.16，第6次=0.09，第7次=0.01" });
+
+        private static readonly BaseCharmDefinition KingsoulDefinition =
+            new BaseCharmDefinition(42, "国王之魂", "Kingsoul", "每两秒恢复4点灵魂", "", 5, 2, "33", "19+26", "20/21", "每两秒恢复4点灵魂", "每两秒恢复4点灵魂", "每两秒恢复4点灵魂", new string[] { "20", "21" });
+
         private static readonly Dictionary<int, BaseCharmDefinition> AlternateForms =
             new Dictionary<int, BaseCharmDefinition>()
         {
-            { 36, new BaseCharmDefinition(36, "国王之魂", "Kingsoul", "每两秒恢复4点灵魂", "", 5, 2, "33", "19+26", "20/21", "每两秒恢复4点灵魂", "每两秒恢复4点灵魂", "每两秒恢复4点灵魂", new string[] { "20", "21" }) },
-            { 40, new BaseCharmDefinition(40, "无忧旋律", "Carefree Melody", "在受伤时按照概率抵挡伤害一次，没受伤0％10％20％30％50％70％80％，第7次90％。触发效果重置受伤害次数，但回血、坐椅子和进出梦境不重置该次数", "", 2, 1, "无忧旋律：所有格林之子伤害*2", "", "乔尼的祝福 ：抵消伤害时获得 1 点生命血；若同时装备易碎心脏/不屈心脏且已获得生命血核心，额外获得 1 点生命血", "在受伤时按照概率抵挡伤害一次，没受伤0％10％20％30％50％70％80％，第7次90％。触发效果重置受伤害次数，但回血、坐椅子和进出梦境不重置该次数", "在受伤时按照概率抵挡伤害一次，没受伤0％10％20％30％50％70％80％，第7次90％。触发效果重置受伤害次数，但回血、坐椅子和进出梦境不重置该次数", "在受伤时按照概率抵挡伤害一次，没受伤0％10％20％30％50％70％80％，第7次90％。触发效果重置受伤害次数，但回血、坐椅子和进出梦境不重置该次数", new string[] { "多一段判定，叠加判断", "概率叠加，第一次受伤概率=0.81，第二次＝0.64，第三次=0.49，第四次=0.25，第5次=0.16，第6次=0.09，第7次=0.01" }) }
+            { 36, CopyWithId(KingsoulDefinition, 36) },
+            { 40, CopyWithId(CarefreeMelodyDefinition, 40) }
         };
 
         private static readonly List<CopyCharmDefinition> Copies = BuildCopies();
@@ -72,25 +81,29 @@ namespace CharmsEvolve.Data
 
         public static BaseCharmDefinition GetBase(int originalId)
         {
-            if (originalId < 1 || originalId > BaseDefinitions.Length)
-                throw new ArgumentOutOfRangeException("originalId");
-            return ResolveCurrentForm(BaseDefinitions[originalId - 1]);
+            if (originalId >= 1 && originalId <= BaseDefinitions.Length)
+                return ResolveCurrentForm(BaseDefinitions[originalId - 1]);
+            if (originalId == 41)
+                return CarefreeMelodyDefinition;
+            if (originalId == 42)
+                return KingsoulDefinition;
+            throw new ArgumentOutOfRangeException("originalId");
         }
 
         public static CopyCharmDefinition GetCopy(string key)
         {
             CopyCharmDefinition result;
             return key != null && CopyByKey.TryGetValue(key, out result)
-                ? RefreshForm(result)
+                ? result
                 : null;
         }
 
         public static IList<CopyCharmDefinition> GetPage(CopyKind kind)
         {
-            List<CopyCharmDefinition> result = new List<CopyCharmDefinition>(40);
+            List<CopyCharmDefinition> result = new List<CopyCharmDefinition>(42);
             for (int i = 0; i < Copies.Count; i++)
                 if (Copies[i].Kind == kind)
-                    result.Add(RefreshForm(Copies[i]));
+                    result.Add(Copies[i]);
             return result;
         }
 
@@ -110,19 +123,16 @@ namespace CharmsEvolve.Data
             return source;
         }
 
-        private static CopyCharmDefinition RefreshForm(CopyCharmDefinition copy)
-        {
-            BaseCharmDefinition current = GetBase(copy.OriginalId);
-            return CreateCopy(current, copy.Kind);
-        }
-
         private static List<CopyCharmDefinition> BuildCopies()
         {
-            List<CopyCharmDefinition> result = new List<CopyCharmDefinition>(120);
+            List<CopyCharmDefinition> result = new List<CopyCharmDefinition>(126);
             for (int kind = 0; kind < 3; kind++)
             {
+                CopyKind copyKind = (CopyKind)kind;
                 for (int i = 0; i < BaseDefinitions.Length; i++)
-                    result.Add(CreateCopy(BaseDefinitions[i], (CopyKind)kind));
+                    result.Add(CreateCopy(BaseDefinitions[i], copyKind));
+                result.Add(CreateCopy(CarefreeMelodyDefinition, copyKind));
+                result.Add(CreateCopy(KingsoulDefinition, copyKind));
             }
             return result;
         }
@@ -134,6 +144,25 @@ namespace CharmsEvolve.Data
             for (int i = 0; i < Copies.Count; i++)
                 result[Copies[i].Key] = Copies[i];
             return result;
+        }
+
+        private static BaseCharmDefinition CopyWithId(BaseCharmDefinition source, int id)
+        {
+            return new BaseCharmDefinition(
+                id,
+                source.NameZh,
+                source.NameEn,
+                source.BaseEffect,
+                source.VanillaSynergy,
+                source.VanillaCost,
+                source.CopyCost,
+                source.EnhancedSynergy,
+                source.VoidKnight,
+                source.LegacyEnhancement,
+                source.CopyX,
+                source.CopyY,
+                source.CopyZ,
+                source.StackableSynergies);
         }
 
         private static CopyCharmDefinition CreateCopy(BaseCharmDefinition source, CopyKind kind)

@@ -196,7 +196,7 @@ namespace CharmsEvolve.Api
         }
 
         /// <summary>
-        /// Direct native-Sprite override. Recommended for the future 120 custom charm sprites.
+        /// Direct native-Sprite override. Recommended for the future custom charm sprites (currently 126 forms).
         /// The caller retains ownership of the Sprite.
         /// </summary>
         public static void RegisterSprite(string charmKey, Sprite sprite)

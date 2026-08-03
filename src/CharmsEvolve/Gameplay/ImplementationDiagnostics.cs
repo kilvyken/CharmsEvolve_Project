@@ -14,7 +14,7 @@ namespace CharmsEvolve.Gameplay
         {
             Plugin.Log.LogInfo(
                 "Effect audit: " + CharmDatabase.AllCopies.Count +
-                " copy definitions loaded from 40 original charm ids.");
+                " copy definitions loaded from 42 source forms mapped onto 40 physical charm slots.");
 
             Plugin.Log.LogInfo(
                 "Live generic copy-base effects currently patched for original ids: " +
@@ -30,7 +30,7 @@ namespace CharmsEvolve.Gameplay
                 ". Their UI text may exist while the gameplay effect is not active.");
 
             List<int> unimplemented = new List<int>();
-            for (int id = 1; id <= 40; id++)
+            for (int id = 1; id <= 42; id++)
             {
                 if (!Contains(LiveBaseEffectIds, id) &&
                     !Contains(LiveSpecialSynergyIds, id) &&
