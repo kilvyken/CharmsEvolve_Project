@@ -1,6 +1,7 @@
 using System;
 using UnityEngine;
 using CharmsEvolve.Interop;
+using CharmsEvolve.Api;
 
 namespace CharmsEvolve.Gameplay
 {
@@ -29,6 +30,7 @@ namespace CharmsEvolve.Gameplay
                 Mathf.Max(0f, _sharpShadowSoulCooldown - Time.deltaTime);
 
             TickGeoGenerationSynergy();
+            CharmsEvolveApi.RaiseEffectTick(new CharmEffectTickContext(Time.deltaTime, Time.unscaledDeltaTime));
         }
 
         public void ModifyOutgoingHit(ref object hitInstance)

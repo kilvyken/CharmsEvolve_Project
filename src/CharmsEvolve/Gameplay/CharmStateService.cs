@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using CharmsEvolve.Data;
 using CharmsEvolve.Interop;
 using CharmsEvolve.Save;
+using CharmsEvolve.Api;
 
 namespace CharmsEvolve.Gameplay
 {
@@ -137,7 +138,7 @@ namespace CharmsEvolve.Gameplay
             {
                 CopyCharmDefinition definition = CharmDatabase.GetCopy(key);
                 if (definition != null)
-                    total += Math.Max(0, definition.Cost);
+                    total += CharmsEvolveApi.ResolveCharmCost(definition);
             }
             return total;
         }
@@ -176,7 +177,7 @@ namespace CharmsEvolve.Gameplay
             if (_equipped.Contains(definition.Key))
                 return true;
 
-            int newCost = GetTotalUsedNotches() + Math.Max(0, definition.Cost);
+            int newCost = GetTotalUsedNotches() + CharmsEvolveApi.ResolveCharmCost(definition);
             int slots = GameReflection.GetCharmSlots();
             if (newCost <= slots)
                 return true;
@@ -207,6 +208,7 @@ namespace CharmsEvolve.Gameplay
 
                 _equipped.Remove(definition.Key);
                 MarkChanged();
+                Plugin.Log.LogInfo("Unequipped copy charm " + definition.Key + "; custom notch total=" + GetCustomNotchCost() + ".");
                 return true;
             }
 
@@ -215,6 +217,8 @@ namespace CharmsEvolve.Gameplay
 
             _equipped.Add(definition.Key);
             MarkChanged();
+            Plugin.Log.LogInfo("Equipped copy charm " + definition.Key + "; resolved cost=" +
+                CharmsEvolveApi.ResolveCharmCost(definition) + ", custom notch total=" + GetCustomNotchCost() + ".");
             return true;
         }
 

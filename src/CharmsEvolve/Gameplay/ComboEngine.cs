@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using CharmsEvolve.Data;
+using CharmsEvolve.Api;
 
 namespace CharmsEvolve.Gameplay
 {
@@ -99,19 +100,33 @@ namespace CharmsEvolve.Gameplay
             HashSet<int> references = ExtractReferences(text);
             references.Remove(source.OriginalId);
 
+            bool active = true;
             foreach (int id in references)
             {
                 if (!_state.IsOriginalOrCopyEquipped(id))
-                    return;
+                {
+                    active = false;
+                    break;
+                }
             }
 
-            ActiveSynergy synergy = new ActiveSynergy();
-            synergy.SourceKey = source.Key;
-            synergy.Description = text;
             int[] ids = new int[references.Count];
             references.CopyTo(ids);
             Array.Sort(ids);
-            synergy.ReferencedOriginalIds = ids;
+
+            SynergyEvaluationContext context = new SynergyEvaluationContext(
+                source.Key,
+                text,
+                ids,
+                active);
+            CharmsEvolveApi.RaiseEvaluateSynergy(context);
+            if (!context.Active)
+                return;
+
+            ActiveSynergy synergy = new ActiveSynergy();
+            synergy.SourceKey = source.Key;
+            synergy.Description = context.Description;
+            synergy.ReferencedOriginalIds = context.ReferencedOriginalIds ?? ids;
             _cache.Add(synergy);
         }
 

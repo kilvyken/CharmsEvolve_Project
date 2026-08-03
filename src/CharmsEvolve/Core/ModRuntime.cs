@@ -41,6 +41,7 @@ namespace CharmsEvolve.Core
         {
             CharmsEvolveApi.Initialize(_state, _textures, _modifiers, _combos);
             TryLoadCurrentSlot(true);
+            ImplementationDiagnostics.LogStartupAudit();
         }
 
         public void InstallPatches(Harmony harmony)

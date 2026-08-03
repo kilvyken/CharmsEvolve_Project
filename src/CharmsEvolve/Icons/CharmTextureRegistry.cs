@@ -12,12 +12,30 @@ namespace CharmsEvolve.Icons
             new Dictionary<string, IconHandle>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, Sprite> _overrideSprites =
             new Dictionary<string, Sprite>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, Sprite> _directSpriteOverrides =
+            new Dictionary<string, Sprite>(StringComparer.OrdinalIgnoreCase);
         private readonly List<Texture2D> _ownedTextures = new List<Texture2D>();
         private readonly List<Sprite> _ownedSprites = new List<Sprite>();
         private readonly VanillaCharmIconProvider _vanilla = new VanillaCharmIconProvider();
 
         public bool TryGetIcon(string charmKey, int originalCharmId, out IconHandle icon)
         {
+            Sprite direct;
+            if (!string.IsNullOrEmpty(charmKey) &&
+                _directSpriteOverrides.TryGetValue(charmKey, out direct) &&
+                direct != null && direct.texture != null)
+            {
+                Texture texture = direct.texture;
+                Rect textureRect = direct.textureRect;
+                Rect uv = new Rect(
+                    textureRect.x / texture.width,
+                    textureRect.y / texture.height,
+                    textureRect.width / texture.width,
+                    textureRect.height / texture.height);
+                icon = new IconHandle(texture, uv);
+                return icon.IsValid;
+            }
+
             if (charmKey != null && _overrides.TryGetValue(charmKey, out icon))
                 return icon.IsValid;
 
@@ -31,6 +49,11 @@ namespace CharmsEvolve.Icons
         /// </summary>
         public bool TryGetSprite(string charmKey, int originalCharmId, out Sprite sprite)
         {
+            if (!string.IsNullOrEmpty(charmKey) &&
+                _directSpriteOverrides.TryGetValue(charmKey, out sprite) &&
+                sprite != null)
+                return true;
+
             if (!string.IsNullOrEmpty(charmKey) && _overrides.ContainsKey(charmKey))
             {
                 if (_overrideSprites.TryGetValue(charmKey, out sprite) && sprite != null)
@@ -71,6 +94,19 @@ namespace CharmsEvolve.Icons
             return _vanilla.TryGetSprite(charmKey, originalCharmId, out sprite);
         }
 
+        public void RegisterSprite(string charmKey, Sprite sprite)
+        {
+            if (string.IsNullOrEmpty(charmKey))
+                throw new ArgumentException("charmKey is required.", "charmKey");
+            if (sprite == null)
+                throw new ArgumentNullException("sprite");
+
+            DestroyOverrideSprite(charmKey);
+            _overrides.Remove(charmKey);
+            _directSpriteOverrides[charmKey] = sprite;
+            Plugin.Log.LogInfo("Registered native Sprite override for " + charmKey + ": " + sprite.name);
+        }
+
         public void Register(string charmKey, Texture texture, Rect uv)
         {
             if (string.IsNullOrEmpty(charmKey))
@@ -79,6 +115,7 @@ namespace CharmsEvolve.Icons
                 throw new ArgumentNullException("texture");
 
             DestroyOverrideSprite(charmKey);
+            _directSpriteOverrides.Remove(charmKey);
             _overrides[charmKey] = new IconHandle(texture, uv);
         }
 
@@ -153,7 +190,9 @@ namespace CharmsEvolve.Icons
             if (charmKey == null)
                 return false;
             DestroyOverrideSprite(charmKey);
-            return _overrides.Remove(charmKey);
+            bool removed = _overrides.Remove(charmKey);
+            removed |= _directSpriteOverrides.Remove(charmKey);
+            return removed;
         }
 
         public void Dispose()
@@ -172,6 +211,7 @@ namespace CharmsEvolve.Icons
             _ownedSprites.Clear();
             _ownedTextures.Clear();
             _overrideSprites.Clear();
+            _directSpriteOverrides.Clear();
             _overrides.Clear();
             _vanilla.Dispose();
         }

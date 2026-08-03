@@ -38,7 +38,10 @@ namespace CharmsEvolve.Gameplay
         {
             Type type = AccessTools.TypeByName("HealthManager");
             if (type == null)
+            {
+                Plugin.Log.LogError("Gameplay patch missing type: HealthManager. Outgoing copy-charm damage effects are disabled.");
                 return;
+            }
 
             MethodInfo prefix = AccessTools.Method(typeof(HarmonyBridge), "OutgoingDamagePrefix");
             MethodInfo[] methods = type.GetMethods(
@@ -59,14 +62,20 @@ namespace CharmsEvolve.Gameplay
                 count++;
             }
 
-            Plugin.Log.LogInfo("Patched outgoing damage overloads: " + count);
+            if (count == 0)
+                Plugin.Log.LogError("No HealthManager.TakeDamage(HitInstance) overload was patched; outgoing damage effects are disabled.");
+            else
+                Plugin.Log.LogInfo("Patched outgoing damage overloads: " + count);
         }
 
         private static void PatchHeroDamage(Harmony harmony)
         {
             Type type = AccessTools.TypeByName("HeroController");
             if (type == null)
+            {
+                Plugin.Log.LogError("Gameplay patch missing type: HeroController. Incoming damage and on-damage effects are disabled.");
                 return;
+            }
 
             MethodInfo prefix = AccessTools.Method(typeof(HarmonyBridge), "HeroDamagePrefix");
             MethodInfo postfix = AccessTools.Method(typeof(HarmonyBridge), "HeroDamagePostfix");
@@ -90,14 +99,20 @@ namespace CharmsEvolve.Gameplay
                 }
             }
 
-            Plugin.Log.LogInfo("Patched hero damage overloads: " + count);
+            if (count == 0)
+                Plugin.Log.LogError("No HeroController.TakeHealth(int) overload was patched; incoming damage and on-damage effects are disabled.");
+            else
+                Plugin.Log.LogInfo("Patched hero damage overloads: " + count);
         }
 
         private static void PatchGeoGain(Harmony harmony)
         {
             Type type = AccessTools.TypeByName("HeroController");
             if (type == null)
+            {
+                Plugin.Log.LogError("Gameplay patch missing type: HeroController. Geo effects are disabled.");
                 return;
+            }
 
             MethodInfo prefix = AccessTools.Method(typeof(HarmonyBridge), "GeoGainPrefix");
             string[] names = { "AddGeo", "GiveGeo" };
@@ -121,14 +136,20 @@ namespace CharmsEvolve.Gameplay
                 }
             }
 
-            Plugin.Log.LogInfo("Patched geo gain overloads: " + count);
+            if (count == 0)
+                Plugin.Log.LogError("No HeroController AddGeo/GiveGeo overload was patched; Geo effects are disabled.");
+            else
+                Plugin.Log.LogInfo("Patched geo gain overloads: " + count);
         }
 
         private static void PatchNotchRecalculation(Harmony harmony)
         {
             Type type = AccessTools.TypeByName("PlayerData");
             if (type == null)
+            {
+                Plugin.Log.LogError("Gameplay patch missing type: PlayerData. Custom notch synchronization is disabled.");
                 return;
+            }
 
             MethodInfo postfix = AccessTools.Method(typeof(HarmonyBridge), "NotchPostfix");
             string[] names =
@@ -155,7 +176,10 @@ namespace CharmsEvolve.Gameplay
                 }
             }
 
-            Plugin.Log.LogInfo("Patched notch recalculation methods: " + count);
+            if (count == 0)
+                Plugin.Log.LogError("No PlayerData notch recalculation method was patched; custom notch synchronization may drift.");
+            else
+                Plugin.Log.LogInfo("Patched notch recalculation methods: " + count);
         }
 
         private static void OutgoingDamagePrefix(object[] __args)

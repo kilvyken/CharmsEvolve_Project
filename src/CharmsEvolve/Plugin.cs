@@ -9,7 +9,7 @@ namespace CharmsEvolve
     [BepInPlugin(
         "com.hollowknight.charmsevolve",
         "Charms Evolve",
-        "0.3.0")]
+        "0.3.1")]
     [BepInProcess("hollow_knight.exe")]
     [BepInProcess("hollow_knight.x86_64")]
     [BepInProcess("hollow_knight")]
@@ -17,7 +17,7 @@ namespace CharmsEvolve
     {
         public const string PluginGuid = "com.hollowknight.charmsevolve";
         public const string PluginName = "Charms Evolve";
-        public const string PluginVersion = "0.3.0";
+        public const string PluginVersion = "0.3.1";
 
         internal static Plugin Instance { get; private set; }
         internal static ManualLogSource Log { get; private set; }

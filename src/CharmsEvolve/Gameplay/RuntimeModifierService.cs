@@ -1,5 +1,6 @@
 using System;
 using CharmsEvolve.Interop;
+using CharmsEvolve.Api;
 
 namespace CharmsEvolve.Gameplay
 {
@@ -115,6 +116,7 @@ namespace CharmsEvolve.Gameplay
             value.SoulOnDamage = 15 * _state.GetCopyCount(3);
             value.BaldurShellExtraBlocks = 4 * _state.GetCopyCount(5);
 
+            CharmsEvolveApi.RaiseRuntimeModifiersBuilding(value);
             _snapshot = value;
             _dirty = false;
 

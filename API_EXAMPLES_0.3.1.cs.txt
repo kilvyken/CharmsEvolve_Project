@@ -1,0 +1,32 @@
+// 动态修改护符槽位消耗
+CharmsEvolve.Api.CharmsEvolveApi.ResolveNotchCost += context =>
+{
+    if (context.CharmKey == "X-19")
+        context.Cost = 2;
+};
+
+// 注册未来绘制的原生 Sprite
+CharmsEvolve.Api.CharmsEvolveApi.RegisterSprite("X-01", mySprite);
+
+// 扩展右侧描述
+CharmsEvolve.Api.CharmsEvolveApi.BuildCharmDescription += context =>
+{
+    if (context.CharmKey == "X-01")
+        context.Description += "\n测试说明：此效果由外部模块追加。";
+};
+
+// 通用每帧效果扩展
+CharmsEvolve.Api.CharmsEvolveApi.EffectTick += context =>
+{
+    // 使用 GetEffectiveCharmCount / IsOriginalOrCopyEquipped 查询等价装备状态。
+};
+
+// 把外部效果异常写入 BepInEx 日志
+try
+{
+    // effect code
+}
+catch (System.Exception ex)
+{
+    CharmsEvolve.Api.CharmsEvolveApi.ReportEffectError("X-01.custom", "外部效果执行失败", ex);
+}

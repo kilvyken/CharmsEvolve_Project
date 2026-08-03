@@ -9,6 +9,7 @@ using CharmsEvolve.Data;
 using CharmsEvolve.Gameplay;
 using CharmsEvolve.Icons;
 using CharmsEvolve.Interop;
+using CharmsEvolve.Api;
 
 namespace CharmsEvolve.UI
 {
@@ -42,6 +43,7 @@ namespace CharmsEvolve.UI
             public SpriteRenderer Icon;
             public Sprite OriginalSprite;
             public Color OriginalColor;
+            public Color PageColor;
             public bool OriginalEnabled;
             public readonly List<MarkerState> EquippedMarkers = new List<MarkerState>();
             public readonly List<MarkerState> LockedMarkers = new List<MarkerState>();
@@ -76,7 +78,7 @@ namespace CharmsEvolve.UI
 
         private GameObject _pageSelector;
         private SpriteRenderer _pageSelectorRenderer;
-        private BoxCollider2D _pageSelectorCollider;
+        private Component _pageSelectorCollider;
         private readonly Sprite[] _pageSelectorSprites = new Sprite[PageCount];
         private bool _pageSelectorSelected;
         private Slot _lastGridSlot;
@@ -100,6 +102,11 @@ namespace CharmsEvolve.UI
         private int _lastConsumedFrame = -1;
         private string _lastConsumedEvent = string.Empty;
         private bool _loggedMissingNativeFeedback;
+        private Color _nativeUnequippedColor = Color.white;
+        private Color _nativeEquippedColor = new Color(0.42f, 0.42f, 0.42f, 1f);
+        private bool _hasNativeUnequippedColor;
+        private bool _hasNativeEquippedColor;
+        private const string VanillaDescriptionMarker = "\n\n【Charms Evolve】";
 
         private static CharmPageController _eventTarget;
 
@@ -174,15 +181,18 @@ namespace CharmsEvolve.UI
             if (!_built || _pane == null || !_pane.activeInHierarchy)
                 return;
 
-            if (_page > 0 && !_transitioning)
-            {
-                Slot selected = GetSelectedSlot();
-                if (selected != null)
-                {
-                    _lastGridSlot = selected;
-                    UpdateDetails(selected);
-                }
-            }
+            if (_transitioning)
+                return;
+
+            Slot selected = GetSelectedSlot();
+            if (selected == null)
+                return;
+
+            _lastGridSlot = selected;
+            if (_page > 0)
+                UpdateDetails(selected);
+            else
+                UpdateVanillaDetails(selected);
         }
 
         public void Dispose()
@@ -546,7 +556,7 @@ namespace CharmsEvolve.UI
                 if (slot.Icon == null)
                     continue;
 
-                Color baseColor = slot.OriginalColor;
+                Color baseColor = slot.PageColor;
                 slot.Icon.color = new Color(baseColor.r, baseColor.g, baseColor.b, baseColor.a * alpha);
             }
         }
@@ -633,6 +643,7 @@ namespace CharmsEvolve.UI
                     OriginalEnabled = renderer.enabled
                 };
                 CaptureMarkers(slot);
+                slot.PageColor = slot.OriginalColor;
                 _slots.Add(slot);
                 _slotByOriginalId[id] = slot;
             }
@@ -641,6 +652,7 @@ namespace CharmsEvolve.UI
                 return false;
 
             AssignGridCoordinates();
+            CaptureNativeCharmPalette();
             return true;
         }
 
@@ -778,6 +790,7 @@ namespace CharmsEvolve.UI
                 {
                     slot.OriginalSprite = slot.Icon.sprite;
                     slot.OriginalColor = slot.Icon.color;
+                    slot.PageColor = slot.OriginalColor;
                     slot.OriginalEnabled = slot.Icon.enabled;
                 }
 
@@ -794,6 +807,64 @@ namespace CharmsEvolve.UI
                 if (marker.GameObject != null)
                     marker.OriginalActive = marker.GameObject.activeSelf;
             }
+        }
+
+        private void CaptureNativeCharmPalette()
+        {
+            _hasNativeUnequippedColor = false;
+            _hasNativeEquippedColor = false;
+
+            for (int i = 0; i < _slots.Count; i++)
+            {
+                Slot slot = _slots[i];
+                if (slot == null || slot.Icon == null)
+                    continue;
+
+                if (GameReflection.IsVanillaCharmEquipped(slot.OriginalId))
+                {
+                    if (!_hasNativeEquippedColor)
+                    {
+                        _nativeEquippedColor = slot.Icon.color;
+                        _hasNativeEquippedColor = true;
+                    }
+                }
+                else if (!_hasNativeUnequippedColor)
+                {
+                    _nativeUnequippedColor = slot.Icon.color;
+                    _hasNativeUnequippedColor = true;
+                }
+            }
+
+            if (!_hasNativeUnequippedColor && _slots.Count > 0 && _slots[0].Icon != null)
+            {
+                _nativeUnequippedColor = _slots[0].Icon.color;
+                _hasNativeUnequippedColor = true;
+            }
+
+            if (!_hasNativeEquippedColor)
+            {
+                Color source = _nativeUnequippedColor;
+                _nativeEquippedColor = new Color(source.r * 0.42f, source.g * 0.42f, source.b * 0.42f, source.a);
+                Plugin.Log.LogWarning("No equipped vanilla charm was visible while building the pager; using a native-color-derived dim fallback until the pane is rebuilt with an equipped charm.");
+            }
+            else
+            {
+                Plugin.Log.LogInfo("Captured native equipped charm tint from the original charm collection.");
+            }
+        }
+
+        private Color ResolveNativeUnequippedColor(Slot slot)
+        {
+            return _hasNativeUnequippedColor ? _nativeUnequippedColor : slot.OriginalColor;
+        }
+
+        private Color ResolveNativeEquippedColor(Slot slot)
+        {
+            if (_hasNativeEquippedColor)
+                return _nativeEquippedColor;
+
+            Color source = ResolveNativeUnequippedColor(slot);
+            return new Color(source.r * 0.42f, source.g * 0.42f, source.b * 0.42f, source.a);
         }
 
         private void ApplyPageVisuals()
@@ -824,9 +895,11 @@ namespace CharmsEvolve.UI
                 slot.Icon.sprite = slot.OriginalSprite;
 
             bool owned = _state.IsOwned(definition.Key);
+            bool equipped = _state.IsEquipped(definition.Key);
             slot.Icon.enabled = owned;
-            slot.Icon.color = slot.OriginalColor;
-            SetMarkers(slot.EquippedMarkers, _state.IsEquipped(definition.Key));
+            slot.PageColor = equipped ? ResolveNativeEquippedColor(slot) : ResolveNativeUnequippedColor(slot);
+            slot.Icon.color = slot.PageColor;
+            SetMarkers(slot.EquippedMarkers, equipped);
             SetMarkers(slot.LockedMarkers, !owned);
         }
 
@@ -842,6 +915,7 @@ namespace CharmsEvolve.UI
                 return;
 
             slot.Icon.sprite = slot.OriginalSprite;
+            slot.PageColor = slot.OriginalColor;
             slot.Icon.color = slot.OriginalColor;
             slot.Icon.enabled = slot.OriginalEnabled;
             RestoreMarkers(slot.EquippedMarkers);
@@ -902,13 +976,13 @@ namespace CharmsEvolve.UI
 
         private GameObject FindEquipmentTarget()
         {
-            Collider2D[] colliders = _pane.GetComponentsInChildren<Collider2D>(true);
+            Component[] components = _pane.GetComponentsInChildren<Component>(true);
             GameObject best = null;
             float bestScore = float.MaxValue;
-            for (int i = 0; i < colliders.Length; i++)
+            for (int i = 0; i < components.Length; i++)
             {
-                Collider2D collider = colliders[i];
-                if (collider == null || collider.gameObject == _pageSelector)
+                Component collider = components[i];
+                if (!IsCollider2DComponent(collider) || collider.gameObject == _pageSelector)
                     continue;
 
                 bool gridObject = false;
@@ -962,10 +1036,18 @@ namespace CharmsEvolve.UI
             if (_pageSelectorRenderer == null)
                 _pageSelectorRenderer = _pageSelector.AddComponent<SpriteRenderer>();
 
-            _pageSelectorCollider = _pageSelector.GetComponent<BoxCollider2D>();
-            if (_pageSelectorCollider == null)
-                _pageSelectorCollider = _pageSelector.AddComponent<BoxCollider2D>();
-            _pageSelectorCollider.size = PageSelectorColliderSize;
+            Type colliderType = ResolveBoxCollider2DType();
+            if (colliderType != null)
+            {
+                _pageSelectorCollider = _pageSelector.GetComponent(colliderType);
+                if (_pageSelectorCollider == null)
+                    _pageSelectorCollider = _pageSelector.AddComponent(colliderType);
+                CharmUtil.TrySetMember(_pageSelectorCollider, "size", PageSelectorColliderSize);
+            }
+            else
+            {
+                Plugin.Log.LogError("UnityEngine.BoxCollider2D could not be resolved; the charm page selector cannot receive native cursor navigation.");
+            }
 
             for (int i = 0; i < PageCount; i++)
             {
@@ -978,6 +1060,31 @@ namespace CharmsEvolve.UI
             _pageSelectorRenderer.gameObject.layer = ResolveUiLayer();
             _pageSelectorRenderer.color = GetNativeUiColor();
             UpdatePageSelectorSprite();
+        }
+
+        private static Type ResolveBoxCollider2DType()
+        {
+            Type type = AccessTools.TypeByName("UnityEngine.BoxCollider2D");
+            if (type != null)
+                return type;
+
+            return Type.GetType("UnityEngine.BoxCollider2D, UnityEngine.Physics2DModule", false);
+        }
+
+        private static bool IsCollider2DComponent(Component component)
+        {
+            if (component == null)
+                return false;
+
+            Type type = component.GetType();
+            while (type != null)
+            {
+                if (string.Equals(type.Name, "Collider2D", StringComparison.Ordinal) ||
+                    type.Name.EndsWith("Collider2D", StringComparison.Ordinal))
+                    return true;
+                type = type.BaseType;
+            }
+            return false;
         }
 
         private Color GetNativeUiColor()
@@ -1105,7 +1212,18 @@ namespace CharmsEvolve.UI
                 return;
 
             string title = definition.DisplayName;
-            string description = "花费：" + definition.Cost + " 槽\n" + definition.Description;
+            int resolvedCost = CharmsEvolveApi.GetCharmCost(definition.Key);
+            string description = "花费：" + resolvedCost + " 槽";
+
+            if (!string.IsNullOrEmpty(definition.SourceEffect))
+                description += "\n\n基础能力：" + definition.SourceEffect;
+
+            if (!string.IsNullOrEmpty(definition.Description) &&
+                !string.Equals(definition.Description, definition.SourceEffect, StringComparison.Ordinal))
+                description += "\n\n同名原版 + 复制护符：" + definition.Description;
+
+            if (!string.IsNullOrEmpty(definition.VanillaSynergy))
+                description += "\n\n原版联动：" + definition.VanillaSynergy;
 
             IList<ActiveSynergy> synergies = _combos.GetActiveSynergiesFor(definition.Key);
             if (synergies.Count > 0)
@@ -1132,6 +1250,12 @@ namespace CharmsEvolve.UI
             if (Time.unscaledTime < _statusUntil && !string.IsNullOrEmpty(_status))
                 description += "\n\n" + _status;
 
+            CharmDescriptionContext descriptionContext = new CharmDescriptionContext(
+                definition.Key, definition.OriginalId, false, title, description);
+            CharmsEvolveApi.RaiseBuildCharmDescription(descriptionContext);
+            title = descriptionContext.Title;
+            description = descriptionContext.Description;
+
             SetText(_nameText, title);
             SetText(_descriptionText, description);
 
@@ -1143,6 +1267,52 @@ namespace CharmsEvolve.UI
                 _detailIcon.color = Color.white;
                 _detailIcon.enabled = _state.IsOwned(definition.Key);
             }
+        }
+
+        private void UpdateVanillaDetails(Slot slot)
+        {
+            if (slot == null || _descriptionText == null)
+                return;
+
+            BaseCharmDefinition definition = CharmDatabase.GetBase(slot.OriginalId);
+            if (definition == null)
+                return;
+
+            string current = GetText(_descriptionText);
+            int markerIndex = current.IndexOf(VanillaDescriptionMarker, StringComparison.Ordinal);
+            string nativeDescription = markerIndex >= 0 ? current.Substring(0, markerIndex) : current;
+
+            string addition = BuildVanillaAdjustmentText(definition);
+            if (string.IsNullOrEmpty(addition))
+                return;
+
+            string title = GetText(_nameText);
+            string merged = nativeDescription + VanillaDescriptionMarker + "\n" + addition;
+            CharmDescriptionContext context = new CharmDescriptionContext(
+                null, slot.OriginalId, true, title, merged);
+            CharmsEvolveApi.RaiseBuildCharmDescription(context);
+            SetText(_nameText, context.Title);
+            SetText(_descriptionText, context.Description);
+        }
+
+        private static string BuildVanillaAdjustmentText(BaseCharmDefinition definition)
+        {
+            List<string> lines = new List<string>();
+            if (!string.IsNullOrEmpty(definition.EnhancedSynergy))
+                lines.Add("强化联动：" + definition.EnhancedSynergy);
+            if (!string.IsNullOrEmpty(definition.VoidKnight))
+                lines.Add("形态联动：" + definition.VoidKnight);
+            if (!string.IsNullOrEmpty(definition.LegacyEnhancement))
+                lines.Add("额外效果：" + definition.LegacyEnhancement);
+            if (definition.StackableSynergies != null)
+            {
+                for (int i = 0; i < definition.StackableSynergies.Length; i++)
+                {
+                    if (!string.IsNullOrEmpty(definition.StackableSynergies[i]))
+                        lines.Add("可叠加联动：" + definition.StackableSynergies[i]);
+                }
+            }
+            return string.Join("\n", lines.ToArray());
         }
 
         private void CaptureNativeDetails()
@@ -1392,7 +1562,11 @@ namespace CharmsEvolve.UI
                    typeName.IndexOf("iTween", StringComparison.OrdinalIgnoreCase) >= 0 ||
                    typeName.IndexOf("Animation", StringComparison.OrdinalIgnoreCase) >= 0 ||
                    typeName.IndexOf("Animator", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   typeName.IndexOf("Fade", StringComparison.OrdinalIgnoreCase) >= 0;
+                   typeName.IndexOf("Fade", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   typeName.IndexOf("Particle", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   typeName.IndexOf("SpawnObject", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   typeName.IndexOf("Pool", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   string.Equals(typeName, "ActivateGameObject", StringComparison.OrdinalIgnoreCase);
         }
 
         private bool TryInvokeNativeAudioAction(string stateName, int preferredIndex)
