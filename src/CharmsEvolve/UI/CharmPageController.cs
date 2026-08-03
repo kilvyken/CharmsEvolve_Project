@@ -530,9 +530,9 @@ namespace CharmsEvolve.UI
 
             bool set = false;
             if (_updateCursorFsm != null)
-                set |= CharmUtil.SetFsmGameObjectVariable(_updateCursorFsm, "Item", item);
-            set |= CharmUtil.SetFsmGameObjectVariable(_uiCharmsFsm, "Item", item);
-            set |= CharmUtil.SetFsmGameObjectVariable(_uiCharmsFsm, "Selected Item", item);
+                set = CharmUtil.SetFsmGameObjectVariable(_updateCursorFsm, "Item", item);
+            if (!set)
+                set = CharmUtil.SetFsmGameObjectVariable(_uiCharmsFsm, "Item", item);
 
             if (_updateCursorFsm != null)
             {
@@ -1022,6 +1022,31 @@ namespace CharmsEvolve.UI
             if (root == null)
                 return null;
 
+            // The Unity 6 collection slot's actual charm renderer is the renderer on
+            // the numbered slot root.  The two children are state/effect layers
+            // (notably Royal Charm).  Scoring every descendant allowed those effect
+            // layers to win when the root was inactive, which produced the large blur
+            // sprites on the unmodified vanilla page.
+            SpriteRenderer rootRenderer = root.GetComponent<SpriteRenderer>();
+            if (rootRenderer != null)
+                return rootRenderer;
+
+            // Some builds wrap the main renderer in one direct child.  Prefer a direct
+            // non-marker/non-effect child before entering the compatibility scorer.
+            Transform rootTransform = root.transform;
+            for (int i = 0; i < rootTransform.childCount; i++)
+            {
+                Transform child = rootTransform.GetChild(i);
+                if (child == null)
+                    continue;
+                SpriteRenderer renderer = child.GetComponent<SpriteRenderer>();
+                if (renderer == null || IsMarkerRenderer(renderer) ||
+                    IsBlurOrEffectName(renderer.gameObject.name) ||
+                    IsBlurOrEffectName(renderer.sprite == null ? null : renderer.sprite.name))
+                    continue;
+                return renderer;
+            }
+
             List<SpriteRenderer> candidates = new List<SpriteRenderer>();
             HashSet<SpriteRenderer> charmItemReferences = new HashSet<SpriteRenderer>();
             AddRendererCandidate(candidates, root.GetComponent<SpriteRenderer>());
@@ -1339,6 +1364,7 @@ namespace CharmsEvolve.UI
                 (namedIds.Count == 0 ? "" : " [" + string.Join(",", new List<int>(namedIds).ConvertAll(delegate(int value) { return value.ToString(); }).ToArray()) + "]") + ".");
             if (directChildren.Count > 0)
                 Plugin.Log.LogInfo("Charm grid direct children: " + string.Join(" | ", directChildren.ToArray()));
+            LogSlotRendererDiagnostics();
 
             Plugin.Log.LogInfo(
                 "CharmItem probe: resources=" + items.Length +
@@ -1349,6 +1375,35 @@ namespace CharmsEvolve.UI
                 Plugin.Log.LogInfo("CharmItem sample: " + samples[i]);
 
             LogNativeFeedbackDiagnostics();
+        }
+
+        private void LogSlotRendererDiagnostics()
+        {
+            int count = Mathf.Min(6, _slots.Count);
+            for (int i = 0; i < count; i++)
+            {
+                Slot slot = _slots[i];
+                if (slot == null || slot.Root == null)
+                    continue;
+                List<string> renderers = new List<string>();
+                SpriteRenderer[] values = slot.Root.GetComponentsInChildren<SpriteRenderer>(true);
+                for (int j = 0; j < values.Length; j++)
+                {
+                    SpriteRenderer renderer = values[j];
+                    if (renderer == null)
+                        continue;
+                    renderers.Add(
+                        CharmUtil.GetHierarchyPath(renderer.gameObject) +
+                        "{sprite=" + (renderer.sprite == null ? "<none>" : renderer.sprite.name) +
+                        ",material=" + (renderer.sharedMaterial == null ? "<none>" : renderer.sharedMaterial.name) +
+                        ",enabled=" + renderer.enabled +
+                        ",scale=" + renderer.transform.localScale + "}");
+                }
+                Plugin.Log.LogInfo(
+                    "Charm slot renderer probe " + slot.OriginalId +
+                    ": selected=" + (slot.Icon == null ? "<none>" : CharmUtil.GetHierarchyPath(slot.Icon.gameObject)) +
+                    " | " + string.Join(" | ", renderers.ToArray()));
+            }
         }
 
         private void LogNativeFeedbackDiagnostics()
@@ -1726,16 +1781,34 @@ namespace CharmsEvolve.UI
 
         private void ApplyNativeIconRendererTemplate(SpriteRenderer renderer)
         {
-            if (renderer == null || _nativeIconRendererTemplate == null ||
-                renderer == _nativeIconRendererTemplate)
+            if (renderer == null)
                 return;
 
-            // The copied Sprite is valid, but some inactive collection renderers use a
-            // glow/blur material. Reuse the material and probe settings from a visible
-            // equipped charm, which is known to render sharply in the same HUD.
+            if (_nativeIconRendererTemplate == null ||
+                _nativeIconRendererTemplate.sprite == null ||
+                !IsInventoryCharmSpriteName(_nativeIconRendererTemplate.sprite.name) ||
+                renderer == _nativeIconRendererTemplate)
+            {
+                // A null material resets SpriteRenderer to Unity's normal sprite
+                // material.  This is safer than copying the divider/effect material.
+                renderer.sharedMaterial = null;
+                renderer.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off;
+                renderer.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off;
+                return;
+            }
+
             renderer.sharedMaterial = _nativeIconRendererTemplate.sharedMaterial;
             renderer.lightProbeUsage = _nativeIconRendererTemplate.lightProbeUsage;
             renderer.reflectionProbeUsage = _nativeIconRendererTemplate.reflectionProbeUsage;
+        }
+
+        private static bool IsInventoryCharmSpriteName(string name)
+        {
+            if (string.IsNullOrEmpty(name) ||
+                !name.StartsWith("Inv_", StringComparison.OrdinalIgnoreCase))
+                return false;
+            int id;
+            return TryParseCharmSpriteId(name, out id) && id >= 1 && id <= 42;
         }
 
         private CopyCharmDefinition GetDefinition(Slot slot)
@@ -1917,20 +1990,12 @@ namespace CharmsEvolve.UI
 
         private Vector3 ResolvePageSelectorPosition()
         {
-            // The live "Next Dot" is the Unity 6 anchor occupying the same visual
-            // location that CharmPreset uses: immediately right of the notch count.
-            // Its sprite is tiny, but its transform remains the most reliable position.
-            GameObject anchor = FindNativePageSelectorTemplate();
-            if (anchor != null)
-            {
-                Vector3 position = anchor.transform.position;
-                Plugin.Log.LogInfo(
-                    "Using live Next Dot as charm page selector anchor: " +
-                    CharmUtil.GetHierarchyPath(anchor) + " @ " + position + ".");
-                return position;
-            }
-
-            Plugin.Log.LogInfo("Using CharmPreset fallback page selector position: " + PageSelectorPosition + ".");
+            // Do not use Equipped Charms/Next Dot as a world-space anchor.  In the
+            // Unity 6 hierarchy its inactive transform reports approximately
+            // (-11, -96), which places both the selector and the native cursor far
+            // outside the inventory.  CharmPreset intentionally uses this stable HUD
+            // world coordinate and constrains Y to survive the historical +100 shift.
+            Plugin.Log.LogInfo("Using verified CharmPreset page selector world position: " + PageSelectorPosition + ".");
             return PageSelectorPosition;
         }
 
@@ -1974,6 +2039,7 @@ namespace CharmsEvolve.UI
             _pageSelector.layer = ResolveUiLayer();
             _pageSelector.transform.position = _resolvedPageSelectorPosition;
             _pageSelector.transform.localScale = Vector3.one;
+            AttachPageSelectorPositionConstraint();
 
             SpriteRenderer[] renderers = _pageSelector.GetComponentsInChildren<SpriteRenderer>(true);
             _pageSelectorRenderer = _pageSelector.GetComponent<SpriteRenderer>();
@@ -2017,11 +2083,10 @@ namespace CharmsEvolve.UI
                         candidate != null && !IsBlurOrEffectName(candidate.name))
                         sprite = candidate;
                 }
-                if (sprite == null && _nativeIconRendererTemplate != null)
-                    sprite = _nativeIconRendererTemplate.sprite;
-                if (sprite == null && _detailIcon != null)
-                    sprite = _detailIcon.sprite;
-
+                // Do not fall back to a random equipped-strip renderer or detail
+                // icon.  The previous build selected Inv_0017_divider and could make
+                // the button transparent/incorrect.  The first four exact inventory
+                // charm sprites are present in this Unity 6 build.
                 _pageSelectorSprites[i] = sprite;
                 if (firstResolved == null && sprite != null)
                     firstResolved = sprite;
@@ -2033,11 +2098,17 @@ namespace CharmsEvolve.UI
                     _pageSelectorSprites[i] = firstResolved;
             }
 
+            // CharmPreset uses the game's HUD sorting-layer id directly.  Keep
+            // Sprites-Default on this independent renderer rather than copying an
+            // arbitrary equipped-strip material.
+            _pageSelectorRenderer.sortingLayerID = 629535577;
             _pageSelectorRenderer.sortingLayerName = "HUD";
             _pageSelectorRenderer.sortingOrder = GetHighestHudSortingOrder() + 10;
             _pageSelectorRenderer.gameObject.layer = ResolveUiLayer();
+            _pageSelectorRenderer.sharedMaterial = null;
             _pageSelectorRenderer.color = Color.white;
-            ApplyNativeIconRendererTemplate(_pageSelectorRenderer);
+            _pageSelectorRenderer.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off;
+            _pageSelectorRenderer.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off;
             UpdatePageSelectorSprite();
 
             Plugin.Log.LogInfo(
@@ -2048,6 +2119,29 @@ namespace CharmsEvolve.UI
                 ", sorting=" + _pageSelectorRenderer.sortingLayerName + "/" +
                 _pageSelectorRenderer.sortingOrder +
                 ", collider=" + (_pageSelectorCollider == null ? "<none>" : _pageSelectorCollider.GetType().Name) + ".");
+        }
+
+        private void AttachPageSelectorPositionConstraint()
+        {
+            if (_pageSelector == null)
+                return;
+
+            Type constraintType = AccessTools.TypeByName("ConstrainPosition");
+            if (constraintType == null)
+                return;
+
+            Component constraint = _pageSelector.GetComponent(constraintType);
+            if (constraint == null)
+                constraint = _pageSelector.AddComponent(constraintType);
+            if (constraint == null)
+                return;
+
+            CharmUtil.TrySetMember(constraint, "constrainX", true);
+            CharmUtil.TrySetMember(constraint, "xMin", PageSelectorPosition.x);
+            CharmUtil.TrySetMember(constraint, "xMax", PageSelectorPosition.x);
+            CharmUtil.TrySetMember(constraint, "constrainY", true);
+            CharmUtil.TrySetMember(constraint, "yMin", PageSelectorPosition.y);
+            CharmUtil.TrySetMember(constraint, "yMax", PageSelectorPosition.y);
         }
 
         private int GetHighestHudSortingOrder()
@@ -2233,6 +2327,11 @@ namespace CharmsEvolve.UI
                 return;
 
             Sprite sprite = _pageSelectorSprites[Mathf.Clamp(_page, 0, PageCount - 1)];
+            if (_pageSelector != null)
+            {
+                _pageSelector.SetActive(true);
+                _pageSelector.transform.position = PageSelectorPosition;
+            }
             _pageSelectorRenderer.sprite = sprite;
             _pageSelectorRenderer.enabled = sprite != null;
             _pageSelectorRenderer.color = Color.white;
@@ -2432,15 +2531,15 @@ namespace CharmsEvolve.UI
                     continue;
 
                 int score = 0;
+                int id;
+                if (!TryParseCharmSpriteId(spriteName, out id) || id < 1 || id > 42 ||
+                    !spriteName.StartsWith("Inv_", StringComparison.OrdinalIgnoreCase))
+                    continue;
                 if (path.IndexOf("Equipped Charms", StringComparison.OrdinalIgnoreCase) >= 0)
                     score += 1200;
                 if (renderer.gameObject.activeInHierarchy)
                     score += 200;
-                if (spriteName.StartsWith("Inv_", StringComparison.OrdinalIgnoreCase))
-                    score += 500;
-                int id;
-                if (TryParseCharmSpriteId(spriteName, out id) && id >= 1 && id <= 42)
-                    score += 400;
+                score += 900;
                 if (renderer.sharedMaterial != null)
                     score += 100;
 
@@ -2450,9 +2549,6 @@ namespace CharmsEvolve.UI
                     _nativeIconRendererTemplate = renderer;
                 }
             }
-
-            if (_nativeIconRendererTemplate == null && _detailIcon != null)
-                _nativeIconRendererTemplate = _detailIcon;
 
             if (_nativeIconRendererTemplate != null)
             {
@@ -2773,28 +2869,15 @@ namespace CharmsEvolve.UI
 
         private void EnforceNativeRendererSettings()
         {
+            // Never rewrite the original collection/detail renderers while page 0 is
+            // active.  The Unity 6 hierarchy contains effect renderers beside the
+            // actual icons; changing their sorting layer at build time was enough to
+            // expose the blur sprites before a custom page was ever selected.
             int uiLayer = ResolveUiLayer();
             List<SpriteRenderer> renderers = new List<SpriteRenderer>();
-            for (int i = 0; i < _slots.Count; i++)
-            {
-                SpriteRenderer renderer = _slots[i].Icon;
-                if (renderer == null)
-                    continue;
-
-                renderer.sortingLayerName = "HUD";
-                renderer.gameObject.layer = uiLayer;
-                renderers.Add(renderer);
-            }
-
-            if (_detailIcon != null)
-            {
-                _detailIcon.sortingLayerName = "HUD";
-                _detailIcon.gameObject.layer = uiLayer;
-                renderers.Add(_detailIcon);
-            }
-
             if (_pageSelectorRenderer != null)
             {
+                _pageSelectorRenderer.sortingLayerID = 629535577;
                 _pageSelectorRenderer.sortingLayerName = "HUD";
                 _pageSelectorRenderer.gameObject.layer = uiLayer;
                 renderers.Add(_pageSelectorRenderer);
