@@ -36,6 +36,15 @@ namespace CharmsEvolve.UI
             public bool OriginalActive;
         }
 
+        private sealed class RendererState
+        {
+            public SpriteRenderer Renderer;
+            public bool OriginalEnabled;
+            public Material OriginalMaterial;
+            public int OriginalSortingLayerId;
+            public int OriginalSortingOrder;
+        }
+
         private sealed class Slot
         {
             public int OriginalId;
@@ -48,8 +57,12 @@ namespace CharmsEvolve.UI
             public Color PageColor;
             public bool OriginalEnabled;
             public bool OriginalRootActive;
+            public Material OriginalMaterial;
+            public int OriginalSortingLayerId;
+            public int OriginalSortingOrder;
             public readonly List<MarkerState> EquippedMarkers = new List<MarkerState>();
             public readonly List<MarkerState> LockedMarkers = new List<MarkerState>();
+            public readonly List<RendererState> AuxiliaryRenderers = new List<RendererState>();
 
             public bool Contains(GameObject selected)
             {
@@ -71,6 +84,7 @@ namespace CharmsEvolve.UI
         private readonly List<Slot> _slots = new List<Slot>();
         private readonly Dictionary<int, Slot> _slotByOriginalId = new Dictionary<int, Slot>();
         private readonly Dictionary<int, Sprite> _nativeSpriteFallbacks = new Dictionary<int, Sprite>();
+        private bool _nativeSpriteScanComplete;
 
         private GameObject _pane;
         private GameObject _gridRoot;
@@ -88,6 +102,9 @@ namespace CharmsEvolve.UI
         private readonly Sprite[] _pageSelectorSprites = new Sprite[PageCount];
         private bool _pageSelectorSelected;
         private Slot _lastGridSlot;
+        private GameObject _lastEquipmentTarget;
+        private SpriteRenderer _nativeIconRendererTemplate;
+        private float _nextSelectorCursorRefresh;
 
         private string _originalName = string.Empty;
         private string _originalDescription = string.Empty;
@@ -192,6 +209,17 @@ namespace CharmsEvolve.UI
             if (_pageSelector != null &&
                 (_pageSelector.transform.position - _resolvedPageSelectorPosition).sqrMagnitude > 0.0001f)
                 _pageSelector.transform.position = _resolvedPageSelectorPosition;
+
+            // Unity 6's Idle Equipped state can rewrite the Update Cursor "Item" variable
+            // after a foreign selectable object is chosen. While the selector owns focus,
+            // gently reassert it instead of letting the native FSM silently snap away.
+            if (_pageSelectorSelected && _pageSelector != null &&
+                Time.unscaledTime >= _nextSelectorCursorRefresh &&
+                !IsPageSelectorObject(GetSelectedObject()))
+            {
+                _nextSelectorCursorRefresh = Time.unscaledTime + 0.08f;
+                SetCursorItem(_pageSelector);
+            }
 
             // Do not reset the selected charm page when the player visits the inventory's
             // equipment or journal panes. Keeping it makes the page feel integrated with the
@@ -316,7 +344,10 @@ namespace CharmsEvolve.UI
                 CancelSpecialFormHold(false);
 
             GameObject eventOwnerObject = CharmUtil.GetOwnerGameObject(eventOwner);
-            bool onSelector = IsPageSelectorSelected() || IsPageSelectorObject(eventOwnerObject);
+            GameObject selectedObject = GetSelectedObject();
+            bool onSelector = _pageSelectorSelected ||
+                              IsPageSelectorObject(selectedObject) ||
+                              IsPageSelectorObject(eventOwnerObject);
             if (onSelector)
                 _pageSelectorSelected = true;
             Slot selected = GetSelectedSlot();
@@ -365,8 +396,9 @@ namespace CharmsEvolve.UI
                 }
             }
 
-            // The selector sits between the equipped strip and the collection. This is the
-            // equivalent of CharmPreset's To Preset / Idle Preset path.
+            // Match CharmPreset's vertical bridge. From the collection's top row, UP
+            // enters the page selector. From the equipped strip, DOWN enters it only
+            // when the cursor has reached the right-most equipped charm.
             if (selected != null && selected.Row == 0 &&
                 (IsEvent(eventName, "UI UP") || IsEvent(eventName, "UI RS UP")))
             {
@@ -375,9 +407,14 @@ namespace CharmsEvolve.UI
                 return true;
             }
 
-            if (StateContains(stateName, "Equipped") &&
-                (IsEvent(eventName, "UI DOWN") || IsEvent(eventName, "UI RS DOWN")))
+            bool downFromEquipment =
+                IsEvent(eventName, "UI DOWN") || IsEvent(eventName, "UI RS DOWN");
+            if (downFromEquipment &&
+                (IsEquipmentSelection(selectedObject) || StateContains(stateName, "Equipped")) &&
+                IsRightmostEquipmentSelection(selectedObject))
             {
+                _lastEquipmentTarget = ResolveEquipmentSelectable(selectedObject) ??
+                                       FindRightmostEquipmentTarget();
                 MarkConsumed(eventName);
                 SelectPageSelector(_lastGridSlot);
                 return true;
@@ -418,16 +455,12 @@ namespace CharmsEvolve.UI
 
         private bool IsPageSelectorSelected()
         {
-            GameObject selected = GetSelectedObject();
-            if (_pageSelector != null && selected != null)
-            {
-                Transform selectedTransform = selected.transform;
-                Transform selectorTransform = _pageSelector.transform;
-                _pageSelectorSelected = selected == _pageSelector ||
-                                        selectedTransform.IsChildOf(selectorTransform) ||
-                                        selectorTransform.IsChildOf(selectedTransform);
-            }
+            if (_pageSelectorSelected)
+                return true;
 
+            GameObject selected = GetSelectedObject();
+            if (IsPageSelectorObject(selected))
+                _pageSelectorSelected = true;
             return _pageSelectorSelected;
         }
 
@@ -449,6 +482,7 @@ namespace CharmsEvolve.UI
                 _lastGridSlot = fromSlot;
 
             _pageSelectorSelected = true;
+            _nextSelectorCursorRefresh = 0f;
             SetCursorItem(_pageSelector);
         }
 
@@ -456,28 +490,35 @@ namespace CharmsEvolve.UI
         {
             _pageSelectorSelected = false;
 
-            // Original reference transition: Idle Preset --UI DOWN--> To Bot.
-            if (CharmUtil.TrySetFsmState(_uiCharmsFsm, "To Bot"))
-                return;
-
-            Slot fallback = _lastGridSlot;
+            // Unity 6 no longer exposes CharmPreset's old "Idle Collection" state.
+            // Enter the closest known collection state when available, then explicitly
+            // set the cursor item so the transition does not depend on cloned FSM actions.
+            CharmUtil.TrySetFsmState(_uiCharmsFsm, "Charm");
+            Slot fallback = FindGridEntryBelowSelector();
+            if (fallback == null)
+                fallback = _lastGridSlot;
             if (fallback == null && _slots.Count > 0)
                 fallback = _slots[0];
             if (fallback != null)
+            {
+                _lastGridSlot = fallback;
                 SetCursorItem(fallback.Root);
+            }
         }
 
         private void LeaveSelectorToEquipment()
         {
             _pageSelectorSelected = false;
 
-            // Original reference transition: Idle Preset --UI UP--> To Equipment.
-            if (CharmUtil.TrySetFsmState(_uiCharmsFsm, "To Equipment"))
-                return;
-
-            GameObject fallback = FindEquipmentTarget();
+            CharmUtil.TrySetFsmState(_uiCharmsFsm, "Idle Equipped");
+            GameObject fallback = _lastEquipmentTarget;
+            if (fallback == null || !fallback.activeInHierarchy)
+                fallback = FindRightmostEquipmentTarget();
             if (fallback != null)
+            {
+                _lastEquipmentTarget = fallback;
                 SetCursorItem(fallback);
+            }
             else if (_lastGridSlot != null)
                 SetCursorItem(_lastGridSlot.Root);
         }
@@ -809,6 +850,7 @@ namespace CharmsEvolve.UI
             }
 
             ResolveDetailPanel();
+            ResolveNativeIconRendererTemplate();
             CaptureDescriptionTypography();
             _resolvedPageSelectorPosition = ResolvePageSelectorPosition();
             BuildPageSelector();
@@ -929,7 +971,10 @@ namespace CharmsEvolve.UI
                 OriginalSprite = icon.sprite,
                 OriginalColor = icon.color,
                 OriginalEnabled = icon.enabled,
-                OriginalRootActive = root.activeSelf
+                OriginalRootActive = root.activeSelf,
+                OriginalMaterial = icon.sharedMaterial,
+                OriginalSortingLayerId = icon.sortingLayerID,
+                OriginalSortingOrder = icon.sortingOrder
             };
             CaptureMarkers(slot);
             slot.PageColor = slot.OriginalColor;
@@ -1015,7 +1060,9 @@ namespace CharmsEvolve.UI
             for (int i = 0; i < candidates.Count; i++)
             {
                 SpriteRenderer renderer = candidates[i];
-                if (renderer == null || IsMarkerRenderer(renderer))
+                if (renderer == null || IsMarkerRenderer(renderer) ||
+                    IsBlurOrEffectName(renderer.gameObject.name) ||
+                    IsBlurOrEffectName(renderer.sprite == null ? null : renderer.sprite.name))
                     continue;
 
                 int score = ScoreCharmRendererCandidate(
@@ -1063,13 +1110,8 @@ namespace CharmsEvolve.UI
                 objectName.IndexOf("charm", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 objectName.IndexOf("sprite", StringComparison.OrdinalIgnoreCase) >= 0)
                 score += 70;
-            if (objectName.IndexOf("glow", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                objectName.IndexOf("shine", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                objectName.IndexOf("blur", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                objectName.IndexOf("back", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                objectName.IndexOf("frame", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                spriteName.IndexOf("glow", StringComparison.OrdinalIgnoreCase) >= 0)
-                score -= 600;
+            if (IsBlurOrEffectName(objectName) || IsBlurOrEffectName(spriteName))
+                score -= 1200;
             if (string.Equals(renderer.sortingLayerName, "HUD", StringComparison.OrdinalIgnoreCase))
                 score += 20;
             return score;
@@ -1427,17 +1469,33 @@ namespace CharmsEvolve.UI
                         GameObject = renderer.gameObject,
                         OriginalActive = renderer.gameObject.activeSelf
                     });
+                    continue;
                 }
-                else if (name.IndexOf("lock", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                         name.IndexOf("unknown", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                         name.IndexOf("unowned", StringComparison.OrdinalIgnoreCase) >= 0)
+
+                if (name.IndexOf("lock", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    name.IndexOf("unknown", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    name.IndexOf("unowned", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     slot.LockedMarkers.Add(new MarkerState
                     {
                         GameObject = renderer.gameObject,
                         OriginalActive = renderer.gameObject.activeSelf
                     });
+                    continue;
                 }
+
+                // Unity 6 slot roots contain extra children such as "Royal Charm".
+                // Their glow/blur renderers inherit activeSelf=true while the parent is
+                // inactive; activating the root for a copied charm therefore reveals
+                // those effects unless they are explicitly suppressed.
+                slot.AuxiliaryRenderers.Add(new RendererState
+                {
+                    Renderer = renderer,
+                    OriginalEnabled = renderer.enabled,
+                    OriginalMaterial = renderer.sharedMaterial,
+                    OriginalSortingLayerId = renderer.sortingLayerID,
+                    OriginalSortingOrder = renderer.sortingOrder
+                });
             }
         }
 
@@ -1451,15 +1509,19 @@ namespace CharmsEvolve.UI
                 if (slot.Icon != null)
                 {
                     slot.OriginalSprite = slot.Icon.sprite;
-                    if (slot.OriginalSprite != null)
+                    if (IsUsableInventoryCharmSprite(slot.OriginalSprite, slot.OriginalId))
                         _nativeSpriteFallbacks[slot.OriginalId] = slot.OriginalSprite;
                     slot.OriginalColor = slot.Icon.color;
                     slot.PageColor = slot.OriginalColor;
                     slot.OriginalEnabled = slot.Icon.enabled;
+                    slot.OriginalMaterial = slot.Icon.sharedMaterial;
+                    slot.OriginalSortingLayerId = slot.Icon.sortingLayerID;
+                    slot.OriginalSortingOrder = slot.Icon.sortingOrder;
                 }
 
                 CaptureMarkerActivity(slot.EquippedMarkers);
                 CaptureMarkerActivity(slot.LockedMarkers);
+                CaptureRendererActivity(slot.AuxiliaryRenderers);
             }
         }
 
@@ -1470,6 +1532,20 @@ namespace CharmsEvolve.UI
                 MarkerState marker = markers[i];
                 if (marker.GameObject != null)
                     marker.OriginalActive = marker.GameObject.activeSelf;
+            }
+        }
+
+        private static void CaptureRendererActivity(List<RendererState> renderers)
+        {
+            for (int i = 0; i < renderers.Count; i++)
+            {
+                RendererState state = renderers[i];
+                if (state.Renderer == null)
+                    continue;
+                state.OriginalEnabled = state.Renderer.enabled;
+                state.OriginalMaterial = state.Renderer.sharedMaterial;
+                state.OriginalSortingLayerId = state.Renderer.sortingLayerID;
+                state.OriginalSortingOrder = state.Renderer.sortingOrder;
             }
         }
 
@@ -1561,10 +1637,17 @@ namespace CharmsEvolve.UI
             if (slot.Root != null && slot.Root.activeSelf != owned)
                 slot.Root.SetActive(owned);
 
+            // Keep only the actual icon plus explicit equipped/locked markers. Unity 6
+            // leaves children such as "Royal Charm" armed under inactive roots; without
+            // this suppression those children become the large blurred blobs seen in the
+            // collection when the root is activated.
+            SetAuxiliaryRenderers(slot.AuxiliaryRenderers, false);
+
             Sprite sprite;
             if (TryResolveCharmVisualSprite(definition.Key, definition.OriginalId, slot, out sprite))
                 slot.Icon.sprite = sprite;
 
+            ApplyNativeIconRendererTemplate(slot.Icon);
             slot.Icon.enabled = owned && slot.Icon.sprite != null;
             slot.PageColor = equipped ? ResolveNativeEquippedColor(slot) : ResolveNativeUnequippedColor(slot);
             slot.Icon.color = slot.PageColor;
@@ -1587,8 +1670,12 @@ namespace CharmsEvolve.UI
             slot.PageColor = slot.OriginalColor;
             slot.Icon.color = slot.OriginalColor;
             slot.Icon.enabled = slot.OriginalEnabled;
+            slot.Icon.sharedMaterial = slot.OriginalMaterial;
+            slot.Icon.sortingLayerID = slot.OriginalSortingLayerId;
+            slot.Icon.sortingOrder = slot.OriginalSortingOrder;
             RestoreMarkers(slot.EquippedMarkers);
             RestoreMarkers(slot.LockedMarkers);
+            RestoreAuxiliaryRenderers(slot.AuxiliaryRenderers);
             if (slot.Root != null && slot.Root.activeSelf != slot.OriginalRootActive)
                 slot.Root.SetActive(slot.OriginalRootActive);
         }
@@ -1611,6 +1698,44 @@ namespace CharmsEvolve.UI
                 if (marker.GameObject != null)
                     marker.GameObject.SetActive(active);
             }
+        }
+
+        private static void SetAuxiliaryRenderers(List<RendererState> renderers, bool enabled)
+        {
+            for (int i = 0; i < renderers.Count; i++)
+            {
+                RendererState state = renderers[i];
+                if (state.Renderer != null)
+                    state.Renderer.enabled = enabled;
+            }
+        }
+
+        private static void RestoreAuxiliaryRenderers(List<RendererState> renderers)
+        {
+            for (int i = 0; i < renderers.Count; i++)
+            {
+                RendererState state = renderers[i];
+                if (state.Renderer == null)
+                    continue;
+                state.Renderer.enabled = state.OriginalEnabled;
+                state.Renderer.sharedMaterial = state.OriginalMaterial;
+                state.Renderer.sortingLayerID = state.OriginalSortingLayerId;
+                state.Renderer.sortingOrder = state.OriginalSortingOrder;
+            }
+        }
+
+        private void ApplyNativeIconRendererTemplate(SpriteRenderer renderer)
+        {
+            if (renderer == null || _nativeIconRendererTemplate == null ||
+                renderer == _nativeIconRendererTemplate)
+                return;
+
+            // The copied Sprite is valid, but some inactive collection renderers use a
+            // glow/blur material. Reuse the material and probe settings from a visible
+            // equipped charm, which is known to render sharply in the same HUD.
+            renderer.sharedMaterial = _nativeIconRendererTemplate.sharedMaterial;
+            renderer.lightProbeUsage = _nativeIconRendererTemplate.lightProbeUsage;
+            renderer.reflectionProbeUsage = _nativeIconRendererTemplate.reflectionProbeUsage;
         }
 
         private CopyCharmDefinition GetDefinition(Slot slot)
@@ -1681,56 +1806,131 @@ namespace CharmsEvolve.UI
             return null;
         }
 
-        private GameObject FindEquipmentTarget()
+        private bool IsEquipmentSelection(GameObject selected)
         {
-            Component[] components = _pane.GetComponentsInChildren<Component>(true);
+            return FindAncestorNamed(selected, "Equipped Charms") != null;
+        }
+
+        private bool IsRightmostEquipmentSelection(GameObject selected)
+        {
+            GameObject rightmost = FindRightmostEquipmentTarget();
+            if (rightmost == null)
+                return selected == null;
+
+            GameObject current = ResolveEquipmentSelectable(selected);
+            if (current == null)
+                return selected == null;
+            return current == rightmost ||
+                   current.transform.IsChildOf(rightmost.transform) ||
+                   rightmost.transform.IsChildOf(current.transform);
+        }
+
+        private GameObject ResolveEquipmentSelectable(GameObject selected)
+        {
+            Transform equipmentRoot = FindAncestorNamed(selected, "Equipped Charms");
+            if (equipmentRoot == null || selected == null)
+                return null;
+
+            Transform current = selected.transform;
+            while (current.parent != null && current.parent != equipmentRoot)
+                current = current.parent;
+            return current.gameObject;
+        }
+
+        private GameObject FindRightmostEquipmentTarget()
+        {
+            Transform equipmentRoot = FindNamedTransform(
+                _pane == null ? null : _pane.transform, "Equipped Charms", 8);
+            if (equipmentRoot == null)
+                return null;
+
             GameObject best = null;
-            float bestScore = float.MaxValue;
-            for (int i = 0; i < components.Length; i++)
+            float bestX = float.NegativeInfinity;
+            SpriteRenderer[] renderers = equipmentRoot.GetComponentsInChildren<SpriteRenderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
             {
-                Component collider = components[i];
-                if (!IsCollider2DComponent(collider) || collider.gameObject == _pageSelector)
+                SpriteRenderer renderer = renderers[i];
+                if (renderer == null || renderer.sprite == null || !renderer.gameObject.activeInHierarchy)
                     continue;
 
-                bool gridObject = false;
-                for (int j = 0; j < _slots.Count; j++)
+                string name = renderer.gameObject.name ?? string.Empty;
+                string spriteName = renderer.sprite.name ?? string.Empty;
+                if (name.IndexOf("dot", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    name.IndexOf("notch", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    name.IndexOf("prompt", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    spriteName.IndexOf("dot", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    spriteName.IndexOf("notch", StringComparison.OrdinalIgnoreCase) >= 0)
+                    continue;
+
+                Transform current = renderer.transform;
+                while (current.parent != null && current.parent != equipmentRoot)
+                    current = current.parent;
+
+                GameObject candidate = current.gameObject;
+                if (candidate == _pageSelector)
+                    continue;
+
+                float x = candidate.transform.position.x;
+                if (x > bestX)
                 {
-                    if (_slots[j].Contains(collider.gameObject))
-                    {
-                        gridObject = true;
-                        break;
-                    }
+                    bestX = x;
+                    best = candidate;
                 }
-                if (gridObject)
+            }
+
+            return best;
+        }
+
+        private Slot FindGridEntryBelowSelector()
+        {
+            Slot best = null;
+            float bestScore = float.PositiveInfinity;
+            for (int i = 0; i < _slots.Count; i++)
+            {
+                Slot slot = _slots[i];
+                if (slot == null || slot.Root == null || slot.Row != 0)
                     continue;
 
-                string name = collider.gameObject.name ?? string.Empty;
-                Vector3 world = collider.transform.position;
-                if (world.y <= _resolvedPageSelectorPosition.y)
-                    continue;
-
-                float score = Mathf.Abs(world.x - _resolvedPageSelectorPosition.x) +
-                              Mathf.Abs(world.y - (_resolvedPageSelectorPosition.y + 1.1f));
-                if (name.IndexOf("equip", StringComparison.OrdinalIgnoreCase) >= 0)
-                    score -= 5f;
-                if (name.IndexOf("charm", StringComparison.OrdinalIgnoreCase) >= 0)
-                    score -= 2f;
-
+                Vector3 position = slot.Root.transform.position;
+                float score = Mathf.Abs(position.x - _resolvedPageSelectorPosition.x) +
+                              Mathf.Abs(position.y - _resolvedPageSelectorPosition.y) * 0.15f;
                 if (score < bestScore)
                 {
                     bestScore = score;
-                    best = collider.gameObject;
+                    best = slot;
                 }
             }
             return best;
         }
 
+        private static Transform FindAncestorNamed(GameObject candidate, string name)
+        {
+            Transform current = candidate == null ? null : candidate.transform;
+            while (current != null)
+            {
+                if (string.Equals(current.gameObject.name, name, StringComparison.OrdinalIgnoreCase))
+                    return current;
+                current = current.parent;
+            }
+            return null;
+        }
+
         private Vector3 ResolvePageSelectorPosition()
         {
-            // CharmPreset uses this stable HUD/world coordinate. The Unity 6 inactive
-            // collection roots do not provide reliable bounds, which previously placed
-            // the selector inside the charm grid.
-            Plugin.Log.LogInfo("Using CharmPreset-style page selector position: " + PageSelectorPosition + ".");
+            // The live "Next Dot" is the Unity 6 anchor occupying the same visual
+            // location that CharmPreset uses: immediately right of the notch count.
+            // Its sprite is tiny, but its transform remains the most reliable position.
+            GameObject anchor = FindNativePageSelectorTemplate();
+            if (anchor != null)
+            {
+                Vector3 position = anchor.transform.position;
+                Plugin.Log.LogInfo(
+                    "Using live Next Dot as charm page selector anchor: " +
+                    CharmUtil.GetHierarchyPath(anchor) + " @ " + position + ".");
+                return position;
+            }
+
+            Plugin.Log.LogInfo("Using CharmPreset fallback page selector position: " + PageSelectorPosition + ".");
             return PageSelectorPosition;
         }
 
@@ -1798,25 +1998,74 @@ namespace CharmsEvolve.UI
                 Plugin.Log.LogError("UnityEngine.BoxCollider2D could not be resolved; the charm page selector cannot receive native cursor navigation.");
             }
 
+            Sprite firstResolved = null;
             for (int i = 0; i < PageCount; i++)
             {
                 int charmId = i + 1;
                 Sprite sprite = FindInventoryCharmSprite(charmId);
-                if (sprite == null)
+                if (!IsUsableInventoryCharmSprite(sprite, charmId))
                 {
                     Slot slot;
-                    if (_slotByOriginalId.TryGetValue(charmId, out slot) && slot != null)
+                    if (_slotByOriginalId.TryGetValue(charmId, out slot) && slot != null &&
+                        IsUsableInventoryCharmSprite(slot.OriginalSprite, charmId))
                         sprite = slot.OriginalSprite;
                 }
                 if (sprite == null)
-                    _textures.TryGetSprite(null, charmId, out sprite);
+                {
+                    Sprite candidate;
+                    if (_textures.TryGetSprite(null, charmId, out candidate) &&
+                        candidate != null && !IsBlurOrEffectName(candidate.name))
+                        sprite = candidate;
+                }
+                if (sprite == null && _nativeIconRendererTemplate != null)
+                    sprite = _nativeIconRendererTemplate.sprite;
+                if (sprite == null && _detailIcon != null)
+                    sprite = _detailIcon.sprite;
+
                 _pageSelectorSprites[i] = sprite;
+                if (firstResolved == null && sprite != null)
+                    firstResolved = sprite;
+            }
+
+            for (int i = 0; i < PageCount; i++)
+            {
+                if (_pageSelectorSprites[i] == null)
+                    _pageSelectorSprites[i] = firstResolved;
             }
 
             _pageSelectorRenderer.sortingLayerName = "HUD";
+            _pageSelectorRenderer.sortingOrder = GetHighestHudSortingOrder() + 10;
             _pageSelectorRenderer.gameObject.layer = ResolveUiLayer();
             _pageSelectorRenderer.color = Color.white;
+            ApplyNativeIconRendererTemplate(_pageSelectorRenderer);
             UpdatePageSelectorSprite();
+
+            Plugin.Log.LogInfo(
+                "Charm page selector visual: sprite=" +
+                (_pageSelectorRenderer.sprite == null ? "<none>" : _pageSelectorRenderer.sprite.name) +
+                ", world=" + _pageSelector.transform.position +
+                ", local=" + _pageSelector.transform.localPosition +
+                ", sorting=" + _pageSelectorRenderer.sortingLayerName + "/" +
+                _pageSelectorRenderer.sortingOrder +
+                ", collider=" + (_pageSelectorCollider == null ? "<none>" : _pageSelectorCollider.GetType().Name) + ".");
+        }
+
+        private int GetHighestHudSortingOrder()
+        {
+            if (_pane == null)
+                return 0;
+
+            int highest = 0;
+            SpriteRenderer[] renderers = _pane.GetComponentsInChildren<SpriteRenderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                SpriteRenderer renderer = renderers[i];
+                if (renderer == null || renderer == _pageSelectorRenderer)
+                    continue;
+                if (string.Equals(renderer.sortingLayerName, "HUD", StringComparison.OrdinalIgnoreCase))
+                    highest = Mathf.Max(highest, renderer.sortingOrder);
+            }
+            return highest;
         }
 
         private static Transform FindNamedTransform(Transform root, string name, int maxDepth)
@@ -1991,65 +2240,115 @@ namespace CharmsEvolve.UI
 
         private bool TryResolveCharmVisualSprite(string key, int originalId, Slot slot, out Sprite sprite)
         {
-            sprite = null;
-            if (_textures.TryGetSprite(key, originalId, out sprite) && sprite != null)
+            if (_nativeSpriteFallbacks.TryGetValue(originalId, out sprite) &&
+                IsUsableInventoryCharmSprite(sprite, originalId))
                 return true;
 
-            if (slot != null && slot.OriginalSprite != null)
+            sprite = FindInventoryCharmSprite(originalId);
+            if (IsUsableInventoryCharmSprite(sprite, originalId))
+            {
+                _nativeSpriteFallbacks[originalId] = sprite;
+                return true;
+            }
+
+            if (slot != null && IsUsableInventoryCharmSprite(slot.OriginalSprite, originalId))
             {
                 sprite = slot.OriginalSprite;
                 _nativeSpriteFallbacks[originalId] = sprite;
                 return true;
             }
 
-            if (_nativeSpriteFallbacks.TryGetValue(originalId, out sprite) && sprite != null)
+            // Keep API-provided textures as a final fallback. The Unity 6 built-in
+            // texture scan can resolve glow atlas entries for inactive slots, so native
+            // inventory Sprites must be preferred whenever they exist.
+            if (_textures.TryGetSprite(key, originalId, out sprite) && sprite != null &&
+                !IsBlurOrEffectName(sprite.name))
                 return true;
 
-            sprite = FindInventoryCharmSprite(originalId);
-            if (sprite != null)
-            {
-                _nativeSpriteFallbacks[originalId] = sprite;
-                return true;
-            }
+            sprite = null;
             return false;
         }
 
-        private static Sprite FindInventoryCharmSprite(int charmId)
+        private Sprite FindInventoryCharmSprite(int charmId)
         {
-            Sprite[] sprites = Resources.FindObjectsOfTypeAll<Sprite>();
-            Sprite best = null;
-            int bestScore = int.MinValue;
-            string exact = charmId == 1 ? "Inv_0013_charm1" :
-                           charmId == 2 ? "Inv_0012_charm2" :
-                           charmId == 3 ? "Inv_0011_charm3" : string.Empty;
+            EnsureNativeInventorySpriteCache();
+            Sprite sprite;
+            return _nativeSpriteFallbacks.TryGetValue(charmId, out sprite) ? sprite : null;
+        }
 
+        private void EnsureNativeInventorySpriteCache()
+        {
+            if (_nativeSpriteScanComplete)
+                return;
+            _nativeSpriteScanComplete = true;
+
+            Sprite[] sprites = Resources.FindObjectsOfTypeAll<Sprite>();
+            Dictionary<int, int> bestScores = new Dictionary<int, int>();
             for (int i = 0; i < sprites.Length; i++)
             {
                 Sprite candidate = sprites[i];
-                if (candidate == null || string.IsNullOrEmpty(candidate.name))
+                if (candidate == null || string.IsNullOrEmpty(candidate.name) ||
+                    IsBlurOrEffectName(candidate.name))
                     continue;
 
-                int parsedId;
-                if (!TryParseCharmSpriteId(candidate.name, out parsedId) || parsedId != charmId)
+                int charmId;
+                if (!TryParseCharmSpriteId(candidate.name, out charmId) ||
+                    charmId < 1 || charmId > 42 ||
+                    !IsUsableInventoryCharmSprite(candidate, charmId))
                     continue;
 
-                int score = 0;
-                if (!string.IsNullOrEmpty(exact) && string.Equals(candidate.name, exact, StringComparison.Ordinal))
-                    score += 2000;
-                if (candidate.name.StartsWith("Inv_", StringComparison.OrdinalIgnoreCase))
-                    score += 500;
-                if (candidate.name.EndsWith("charm" + charmId, StringComparison.OrdinalIgnoreCase))
-                    score += 300;
-                Rect rect = candidate.rect;
-                score += Mathf.RoundToInt(Mathf.Min(200f, rect.width + rect.height));
+                int score = ScoreInventoryCharmSprite(candidate, charmId);
+                int previous;
+                if (bestScores.TryGetValue(charmId, out previous) && previous >= score)
+                    continue;
 
-                if (score > bestScore)
-                {
-                    bestScore = score;
-                    best = candidate;
-                }
+                bestScores[charmId] = score;
+                _nativeSpriteFallbacks[charmId] = candidate;
             }
-            return best;
+
+            Plugin.Log.LogInfo(
+                "Native inventory Sprite cache: " + _nativeSpriteFallbacks.Count +
+                " charm ids resolved from " + sprites.Length + " loaded Sprites.");
+        }
+
+        private static int ScoreInventoryCharmSprite(Sprite candidate, int charmId)
+        {
+            int score = 0;
+            string exact = charmId >= 1 && charmId <= 4
+                ? "Inv_" + (14 - charmId).ToString("D4") + "_charm" + charmId
+                : string.Empty;
+
+            if (!string.IsNullOrEmpty(exact) &&
+                string.Equals(candidate.name, exact, StringComparison.Ordinal))
+                score += 4000;
+            if (candidate.name.StartsWith("Inv_", StringComparison.OrdinalIgnoreCase))
+                score += 1200;
+            if (candidate.name.EndsWith("charm" + charmId, StringComparison.OrdinalIgnoreCase))
+                score += 500;
+
+            Rect rect = candidate.rect;
+            float smaller = Mathf.Min(rect.width, rect.height);
+            float larger = Mathf.Max(rect.width, rect.height);
+            if (smaller >= 32f)
+                score += 200;
+            if (larger <= 512f)
+                score += 100;
+            score += Mathf.RoundToInt(Mathf.Min(300f, smaller));
+            return score;
+        }
+
+        private static bool IsUsableInventoryCharmSprite(Sprite sprite, int charmId)
+        {
+            if (sprite == null || string.IsNullOrEmpty(sprite.name) ||
+                IsBlurOrEffectName(sprite.name))
+                return false;
+
+            int parsedId;
+            if (!TryParseCharmSpriteId(sprite.name, out parsedId) || parsedId != charmId)
+                return false;
+
+            Rect rect = sprite.rect;
+            return rect.width >= 8f && rect.height >= 8f;
         }
 
         private void ResolveDetailPanel()
@@ -2110,6 +2409,80 @@ namespace CharmsEvolve.UI
             }
         }
 
+        private void ResolveNativeIconRendererTemplate()
+        {
+            _nativeIconRendererTemplate = null;
+            if (_pane == null)
+                return;
+
+            SpriteRenderer[] renderers = _pane.GetComponentsInChildren<SpriteRenderer>(true);
+            int bestScore = int.MinValue;
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                SpriteRenderer renderer = renderers[i];
+                if (renderer == null || renderer.sprite == null || IsGridIcon(renderer))
+                    continue;
+
+                string objectName = renderer.gameObject.name ?? string.Empty;
+                string spriteName = renderer.sprite.name ?? string.Empty;
+                string path = CharmUtil.GetHierarchyPath(renderer.gameObject);
+                if (IsBlurOrEffectName(objectName) || IsBlurOrEffectName(spriteName) ||
+                    objectName.IndexOf("dot", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    objectName.IndexOf("notch", StringComparison.OrdinalIgnoreCase) >= 0)
+                    continue;
+
+                int score = 0;
+                if (path.IndexOf("Equipped Charms", StringComparison.OrdinalIgnoreCase) >= 0)
+                    score += 1200;
+                if (renderer.gameObject.activeInHierarchy)
+                    score += 200;
+                if (spriteName.StartsWith("Inv_", StringComparison.OrdinalIgnoreCase))
+                    score += 500;
+                int id;
+                if (TryParseCharmSpriteId(spriteName, out id) && id >= 1 && id <= 42)
+                    score += 400;
+                if (renderer.sharedMaterial != null)
+                    score += 100;
+
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    _nativeIconRendererTemplate = renderer;
+                }
+            }
+
+            if (_nativeIconRendererTemplate == null && _detailIcon != null)
+                _nativeIconRendererTemplate = _detailIcon;
+
+            if (_nativeIconRendererTemplate != null)
+            {
+                Plugin.Log.LogInfo(
+                    "Native crisp charm renderer template: " +
+                    CharmUtil.GetHierarchyPath(_nativeIconRendererTemplate.gameObject) +
+                    ", sprite=" +
+                    (_nativeIconRendererTemplate.sprite == null
+                        ? "<none>"
+                        : _nativeIconRendererTemplate.sprite.name) +
+                    ", material=" +
+                    (_nativeIconRendererTemplate.sharedMaterial == null
+                        ? "<none>"
+                        : _nativeIconRendererTemplate.sharedMaterial.name) + ".");
+            }
+        }
+
+        private static bool IsBlurOrEffectName(string name)
+        {
+            if (string.IsNullOrEmpty(name))
+                return false;
+            return name.IndexOf("glow", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf("blur", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf("shine", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf("halo", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf("royal", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf("back", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf("frame", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
         private void CaptureDescriptionTypography()
         {
             if (_descriptionText == null || _descriptionTypographyCaptured)
@@ -2125,6 +2498,11 @@ namespace CharmsEvolve.UI
                 catch { _originalDescriptionAutoSizing = false; }
             }
             _descriptionTypographyCaptured = true;
+            Plugin.Log.LogInfo(
+                "Charm description typography captured: size=" + _originalDescriptionFontSize +
+                ", min=" + _originalDescriptionFontSizeMin +
+                ", max=" + _originalDescriptionFontSizeMax +
+                ", auto=" + _originalDescriptionAutoSizing + ".");
         }
 
         private static float ReadFloatMember(object target, string name, float fallback)
@@ -2145,27 +2523,26 @@ namespace CharmsEvolve.UI
                 return;
 
             int length = string.IsNullOrEmpty(text) ? 0 : text.Length;
-            float scale = 1f;
-            if (length > 420)
+            float scale = 0.78f;
+            if (length > 320)
+                scale = 0.44f;
+            else if (length > 220)
                 scale = 0.50f;
-            else if (length > 320)
+            else if (length > 140)
                 scale = 0.58f;
-            else if (length > 240)
-                scale = 0.66f;
-            else if (length > 160)
-                scale = 0.76f;
-            else if (length > 100)
-                scale = 0.86f;
+            else if (length > 80)
+                scale = 0.68f;
 
-            float size = Mathf.Max(7.5f, _originalDescriptionFontSize * scale);
+            // Hollow Knight's world-space TMP font sizes are commonly below 7.5.
+            // The old absolute floor therefore enlarged text instead of shrinking it.
+            float size = Mathf.Max(0.1f, _originalDescriptionFontSize * scale);
+            float requestedMinimum = Mathf.Max(0.1f, size * 0.62f);
             float minimum = _originalDescriptionFontSizeMin > 0f
-                ? Mathf.Min(_originalDescriptionFontSizeMin, size)
-                : Mathf.Max(6f, _originalDescriptionFontSize * 0.35f);
+                ? Mathf.Min(_originalDescriptionFontSizeMin, requestedMinimum)
+                : requestedMinimum;
 
             CharmUtil.TrySetMember(_descriptionText, "enableAutoSizing", true);
-            CharmUtil.TrySetMember(_descriptionText, "fontSizeMax", _originalDescriptionFontSizeMax > 0f
-                ? Mathf.Min(_originalDescriptionFontSizeMax, size)
-                : size);
+            CharmUtil.TrySetMember(_descriptionText, "fontSizeMax", size);
             CharmUtil.TrySetMember(_descriptionText, "fontSizeMin", minimum);
             CharmUtil.TrySetMember(_descriptionText, "fontSize", size);
         }
@@ -2910,6 +3287,7 @@ namespace CharmsEvolve.UI
             _slots.Clear();
             _slotByOriginalId.Clear();
             _nativeSpriteFallbacks.Clear();
+            _nativeSpriteScanComplete = false;
             _pane = null;
             _gridRoot = null;
             _uiCharmsFsm = null;
@@ -2923,6 +3301,9 @@ namespace CharmsEvolve.UI
             _pageSelectorCollider = null;
             _pageSelectorSelected = false;
             _lastGridSlot = null;
+            _lastEquipmentTarget = null;
+            _nativeIconRendererTemplate = null;
+            _nextSelectorCursorRefresh = 0f;
             _descriptionTypographyCaptured = false;
             _originalDescriptionFontSize = 0f;
             _originalDescriptionFontSizeMin = 0f;
