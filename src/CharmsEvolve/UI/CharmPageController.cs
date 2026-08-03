@@ -47,6 +47,7 @@ namespace CharmsEvolve.UI
             public Color OriginalColor;
             public Color PageColor;
             public bool OriginalEnabled;
+            public bool OriginalRootActive;
             public readonly List<MarkerState> EquippedMarkers = new List<MarkerState>();
             public readonly List<MarkerState> LockedMarkers = new List<MarkerState>();
 
@@ -69,6 +70,7 @@ namespace CharmsEvolve.UI
         private readonly ComboEngine _combos;
         private readonly List<Slot> _slots = new List<Slot>();
         private readonly Dictionary<int, Slot> _slotByOriginalId = new Dictionary<int, Slot>();
+        private readonly Dictionary<int, Sprite> _nativeSpriteFallbacks = new Dictionary<int, Sprite>();
 
         private GameObject _pane;
         private GameObject _gridRoot;
@@ -910,7 +912,7 @@ namespace CharmsEvolve.UI
             if (root == null)
                 return;
 
-            SpriteRenderer icon = ResolveCharmItemIcon(root, charmItem);
+            SpriteRenderer icon = ResolveCharmItemIcon(root, charmItem, id);
             if (icon == null)
                 return;
 
@@ -926,7 +928,8 @@ namespace CharmsEvolve.UI
                 Icon = icon,
                 OriginalSprite = icon.sprite,
                 OriginalColor = icon.color,
-                OriginalEnabled = icon.enabled
+                OriginalEnabled = icon.enabled,
+                OriginalRootActive = root.activeSelf
             };
             CaptureMarkers(slot);
             slot.PageColor = slot.OriginalColor;
@@ -969,11 +972,14 @@ namespace CharmsEvolve.UI
             return null;
         }
 
-        private static SpriteRenderer ResolveCharmItemIcon(GameObject root, Component charmItem)
+        private static SpriteRenderer ResolveCharmItemIcon(GameObject root, Component charmItem, int expectedId)
         {
-            SpriteRenderer direct = root == null ? null : root.GetComponent<SpriteRenderer>();
-            if (direct != null && !IsMarkerRenderer(direct))
-                return direct;
+            if (root == null)
+                return null;
+
+            List<SpriteRenderer> candidates = new List<SpriteRenderer>();
+            HashSet<SpriteRenderer> charmItemReferences = new HashSet<SpriteRenderer>();
+            AddRendererCandidate(candidates, root.GetComponent<SpriteRenderer>());
 
             string[] members =
             {
@@ -989,43 +995,31 @@ namespace CharmsEvolve.UI
                         continue;
 
                     SpriteRenderer renderer = value as SpriteRenderer;
-                    if (renderer != null && !IsMarkerRenderer(renderer))
-                        return renderer;
-
                     Component component = value as Component;
-                    if (component != null)
-                    {
+                    if (renderer == null && component != null)
                         renderer = component.GetComponent<SpriteRenderer>();
-                        if (renderer != null && !IsMarkerRenderer(renderer))
-                            return renderer;
-                    }
+                    if (renderer == null)
+                        continue;
+
+                    AddRendererCandidate(candidates, renderer);
+                    charmItemReferences.Add(renderer);
                 }
             }
 
-            SpriteRenderer[] renderers = root == null
-                ? new SpriteRenderer[0]
-                : root.GetComponentsInChildren<SpriteRenderer>(true);
+            SpriteRenderer[] descendants = root.GetComponentsInChildren<SpriteRenderer>(true);
+            for (int i = 0; i < descendants.Length; i++)
+                AddRendererCandidate(candidates, descendants[i]);
+
             SpriteRenderer best = null;
             int bestScore = int.MinValue;
-            for (int i = 0; i < renderers.Length; i++)
+            for (int i = 0; i < candidates.Count; i++)
             {
-                SpriteRenderer renderer = renderers[i];
+                SpriteRenderer renderer = candidates[i];
                 if (renderer == null || IsMarkerRenderer(renderer))
                     continue;
 
-                int score = 0;
-                if (renderer.gameObject == root)
-                    score += 200;
-                if (renderer.sprite != null)
-                    score += 100;
-                string name = renderer.gameObject.name ?? string.Empty;
-                if (name.IndexOf("icon", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    name.IndexOf("charm", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    name.IndexOf("sprite", StringComparison.OrdinalIgnoreCase) >= 0)
-                    score += 50;
-                if (string.Equals(renderer.sortingLayerName, "HUD", StringComparison.OrdinalIgnoreCase))
-                    score += 20;
-
+                int score = ScoreCharmRendererCandidate(
+                    renderer, root, expectedId, charmItemReferences.Contains(renderer));
                 if (score > bestScore)
                 {
                     bestScore = score;
@@ -1033,6 +1027,52 @@ namespace CharmsEvolve.UI
                 }
             }
             return best;
+        }
+
+        private static void AddRendererCandidate(List<SpriteRenderer> candidates, SpriteRenderer renderer)
+        {
+            if (renderer != null && !candidates.Contains(renderer))
+                candidates.Add(renderer);
+        }
+
+        private static int ScoreCharmRendererCandidate(
+            SpriteRenderer renderer, GameObject root, int expectedId, bool referencedByCharmItem)
+        {
+            int score = referencedByCharmItem ? 300 : 0;
+            if (renderer.gameObject == root)
+                score += 180;
+
+            string objectName = renderer.gameObject.name ?? string.Empty;
+            string spriteName = renderer.sprite == null ? string.Empty : renderer.sprite.name ?? string.Empty;
+            if (renderer.sprite != null)
+            {
+                score += 100;
+                int spriteId;
+                if (TryParseCharmSpriteId(spriteName, out spriteId))
+                {
+                    if (expectedId > 0 && spriteId == expectedId)
+                        score += 1000;
+                    else if (expectedId > 0)
+                        score -= 500;
+                }
+                if (spriteName.StartsWith("Inv_", StringComparison.OrdinalIgnoreCase))
+                    score += 200;
+            }
+
+            if (objectName.IndexOf("icon", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                objectName.IndexOf("charm", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                objectName.IndexOf("sprite", StringComparison.OrdinalIgnoreCase) >= 0)
+                score += 70;
+            if (objectName.IndexOf("glow", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                objectName.IndexOf("shine", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                objectName.IndexOf("blur", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                objectName.IndexOf("back", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                objectName.IndexOf("frame", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                spriteName.IndexOf("glow", StringComparison.OrdinalIgnoreCase) >= 0)
+                score -= 600;
+            if (string.Equals(renderer.sortingLayerName, "HUD", StringComparison.OrdinalIgnoreCase))
+                score += 20;
+            return score;
         }
 
         private static bool IsMarkerRenderer(SpriteRenderer renderer)
@@ -1200,7 +1240,7 @@ namespace CharmsEvolve.UI
 
                     if (samples.Count < 20)
                     {
-                        SpriteRenderer renderer = ResolveCharmItemIcon(item.gameObject, item);
+                        SpriteRenderer renderer = ResolveCharmItemIcon(item.gameObject, item, id);
                         samples.Add(id + "@" + CharmUtil.GetHierarchyPath(item.gameObject) +
                             " scene=" + CharmUtil.IsLiveSceneObject(item.gameObject) +
                             " active=" + item.gameObject.activeInHierarchy +
@@ -1406,9 +1446,13 @@ namespace CharmsEvolve.UI
             for (int i = 0; i < _slots.Count; i++)
             {
                 Slot slot = _slots[i];
+                if (slot.Root != null)
+                    slot.OriginalRootActive = slot.Root.activeSelf;
                 if (slot.Icon != null)
                 {
                     slot.OriginalSprite = slot.Icon.sprite;
+                    if (slot.OriginalSprite != null)
+                        _nativeSpriteFallbacks[slot.OriginalId] = slot.OriginalSprite;
                     slot.OriginalColor = slot.Icon.color;
                     slot.PageColor = slot.OriginalColor;
                     slot.OriginalEnabled = slot.Icon.enabled;
@@ -1508,15 +1552,20 @@ namespace CharmsEvolve.UI
             if (definition == null)
                 return;
 
-            Sprite sprite;
-            if (_textures.TryGetSprite(definition.Key, definition.OriginalId, out sprite) && sprite != null)
-                slot.Icon.sprite = sprite;
-            else
-                slot.Icon.sprite = slot.OriginalSprite;
-
             bool owned = _state.IsOwned(definition.Key);
             bool equipped = _state.IsEquipped(definition.Key);
-            slot.Icon.enabled = owned;
+
+            // Unity 6 keeps uncollected vanilla slot roots inactive. Enabling only the
+            // SpriteRenderer cannot make a copied charm visible, so custom pages own
+            // the slot root's active state and restore it on the vanilla page.
+            if (slot.Root != null && slot.Root.activeSelf != owned)
+                slot.Root.SetActive(owned);
+
+            Sprite sprite;
+            if (TryResolveCharmVisualSprite(definition.Key, definition.OriginalId, slot, out sprite))
+                slot.Icon.sprite = sprite;
+
+            slot.Icon.enabled = owned && slot.Icon.sprite != null;
             slot.PageColor = equipped ? ResolveNativeEquippedColor(slot) : ResolveNativeUnequippedColor(slot);
             slot.Icon.color = slot.PageColor;
             SetMarkers(slot.EquippedMarkers, equipped);
@@ -1540,6 +1589,8 @@ namespace CharmsEvolve.UI
             slot.Icon.enabled = slot.OriginalEnabled;
             RestoreMarkers(slot.EquippedMarkers);
             RestoreMarkers(slot.LockedMarkers);
+            if (slot.Root != null && slot.Root.activeSelf != slot.OriginalRootActive)
+                slot.Root.SetActive(slot.OriginalRootActive);
         }
 
         private static void RestoreMarkers(List<MarkerState> markers)
@@ -1676,49 +1727,11 @@ namespace CharmsEvolve.UI
 
         private Vector3 ResolvePageSelectorPosition()
         {
-            if (_slots.Count == 0)
-                return PageSelectorPosition;
-
-            float minX = float.PositiveInfinity;
-            float maxX = float.NegativeInfinity;
-            float maxY = float.NegativeInfinity;
-            float minZ = float.PositiveInfinity;
-            List<float> xs = new List<float>();
-            List<float> ys = new List<float>();
-            for (int i = 0; i < _slots.Count; i++)
-            {
-                Slot slot = _slots[i];
-                if (slot == null || slot.Root == null)
-                    continue;
-
-                Vector3 position = slot.Root.transform.position;
-                minX = Mathf.Min(minX, position.x);
-                maxX = Mathf.Max(maxX, position.x);
-                maxY = Mathf.Max(maxY, position.y);
-                minZ = Mathf.Min(minZ, position.z);
-                AddDistinctCoordinate(xs, position.x);
-                AddDistinctCoordinate(ys, position.y);
-            }
-
-            if (float.IsInfinity(maxX) || float.IsInfinity(maxY))
-                return PageSelectorPosition;
-
-            xs.Sort();
-            ys.Sort();
-            float xStep = FindSmallestCoordinateStep(xs, 0.70f);
-            float yStep = FindSmallestCoordinateStep(ys, 0.70f);
-
-            // Place the selector just above the upper-right edge of the live 40-slot
-            // collection, matching CharmPreset's visual role without relying on a
-            // Unity-5-specific local coordinate.
-            float x = maxX + xStep * 0.55f;
-            float y = maxY + yStep * 0.78f;
-            float z = float.IsInfinity(minZ) ? PageSelectorPosition.z : minZ - 0.03f;
-            Vector3 resolved = new Vector3(x, y, z);
-            Plugin.Log.LogDebug(
-                "Resolved charm page selector from live grid bounds: " + resolved +
-                " (grid x=" + minX + ".." + maxX + ", maxY=" + maxY + ").");
-            return resolved;
+            // CharmPreset uses this stable HUD/world coordinate. The Unity 6 inactive
+            // collection roots do not provide reliable bounds, which previously placed
+            // the selector inside the charm grid.
+            Plugin.Log.LogInfo("Using CharmPreset-style page selector position: " + PageSelectorPosition + ".");
+            return PageSelectorPosition;
         }
 
         private static void AddDistinctCoordinate(List<float> values, float value)
@@ -1750,21 +1763,11 @@ namespace CharmsEvolve.UI
                 _pageSelector = existing.gameObject;
             else
             {
-                GameObject template = FindNativePageSelectorTemplate();
-                if (template != null)
-                {
-                    _pageSelector = UnityEngine.Object.Instantiate(template);
-                    _pageSelector.name = "CharmsEvolve Page Selector";
-                    PrepareClonedPageSelector(_pageSelector);
-                    Plugin.Log.LogInfo("Created the page selector from native CharmItem template: " +
-                        CharmUtil.GetHierarchyPath(template) + ".");
-                }
-                else
-                {
-                    _pageSelector = new GameObject("CharmsEvolve Page Selector");
-                    Plugin.Log.LogWarning("No native Next Dot/CharmItem selector template was found; using a SpriteRenderer + Collider2D fallback.");
-                }
+                // Match CharmPreset: a plain HUD object containing one SpriteRenderer
+                // and one BoxCollider2D, rather than cloning the tiny native Next Dot.
+                _pageSelector = new GameObject("CharmsEvolve Page Selector");
                 _pageSelector.transform.SetParent(_pane.transform, true);
+                Plugin.Log.LogInfo("Created CharmPreset-style charm page selector.");
             }
 
             _pageSelector.SetActive(true);
@@ -1772,16 +1775,20 @@ namespace CharmsEvolve.UI
             _pageSelector.transform.position = _resolvedPageSelectorPosition;
             _pageSelector.transform.localScale = Vector3.one;
 
-            _pageSelectorRenderer = ResolveSelectorRenderer(_pageSelector);
+            SpriteRenderer[] renderers = _pageSelector.GetComponentsInChildren<SpriteRenderer>(true);
+            _pageSelectorRenderer = _pageSelector.GetComponent<SpriteRenderer>();
             if (_pageSelectorRenderer == null)
                 _pageSelectorRenderer = _pageSelector.AddComponent<SpriteRenderer>();
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                if (renderers[i] != null && renderers[i] != _pageSelectorRenderer)
+                    renderers[i].enabled = false;
+            }
 
             Type colliderType = ResolveBoxCollider2DType();
             if (colliderType != null)
             {
                 _pageSelectorCollider = _pageSelector.GetComponent(colliderType);
-                if (_pageSelectorCollider == null)
-                    _pageSelectorCollider = FindComponentInChildrenByType(_pageSelector, colliderType);
                 if (_pageSelectorCollider == null)
                     _pageSelectorCollider = _pageSelector.AddComponent(colliderType);
                 CharmUtil.TrySetMember(_pageSelectorCollider, "size", PageSelectorColliderSize);
@@ -1793,14 +1800,22 @@ namespace CharmsEvolve.UI
 
             for (int i = 0; i < PageCount; i++)
             {
-                Sprite sprite;
-                if (_textures.TryGetSprite(null, i + 1, out sprite))
-                    _pageSelectorSprites[i] = sprite;
+                int charmId = i + 1;
+                Sprite sprite = FindInventoryCharmSprite(charmId);
+                if (sprite == null)
+                {
+                    Slot slot;
+                    if (_slotByOriginalId.TryGetValue(charmId, out slot) && slot != null)
+                        sprite = slot.OriginalSprite;
+                }
+                if (sprite == null)
+                    _textures.TryGetSprite(null, charmId, out sprite);
+                _pageSelectorSprites[i] = sprite;
             }
 
             _pageSelectorRenderer.sortingLayerName = "HUD";
             _pageSelectorRenderer.gameObject.layer = ResolveUiLayer();
-            _pageSelectorRenderer.color = GetNativeUiColor();
+            _pageSelectorRenderer.color = Color.white;
             UpdatePageSelectorSprite();
         }
 
@@ -1969,8 +1984,72 @@ namespace CharmsEvolve.UI
                 return;
 
             Sprite sprite = _pageSelectorSprites[Mathf.Clamp(_page, 0, PageCount - 1)];
+            _pageSelectorRenderer.sprite = sprite;
+            _pageSelectorRenderer.enabled = sprite != null;
+            _pageSelectorRenderer.color = Color.white;
+        }
+
+        private bool TryResolveCharmVisualSprite(string key, int originalId, Slot slot, out Sprite sprite)
+        {
+            sprite = null;
+            if (_textures.TryGetSprite(key, originalId, out sprite) && sprite != null)
+                return true;
+
+            if (slot != null && slot.OriginalSprite != null)
+            {
+                sprite = slot.OriginalSprite;
+                _nativeSpriteFallbacks[originalId] = sprite;
+                return true;
+            }
+
+            if (_nativeSpriteFallbacks.TryGetValue(originalId, out sprite) && sprite != null)
+                return true;
+
+            sprite = FindInventoryCharmSprite(originalId);
             if (sprite != null)
-                _pageSelectorRenderer.sprite = sprite;
+            {
+                _nativeSpriteFallbacks[originalId] = sprite;
+                return true;
+            }
+            return false;
+        }
+
+        private static Sprite FindInventoryCharmSprite(int charmId)
+        {
+            Sprite[] sprites = Resources.FindObjectsOfTypeAll<Sprite>();
+            Sprite best = null;
+            int bestScore = int.MinValue;
+            string exact = charmId == 1 ? "Inv_0013_charm1" :
+                           charmId == 2 ? "Inv_0012_charm2" :
+                           charmId == 3 ? "Inv_0011_charm3" : string.Empty;
+
+            for (int i = 0; i < sprites.Length; i++)
+            {
+                Sprite candidate = sprites[i];
+                if (candidate == null || string.IsNullOrEmpty(candidate.name))
+                    continue;
+
+                int parsedId;
+                if (!TryParseCharmSpriteId(candidate.name, out parsedId) || parsedId != charmId)
+                    continue;
+
+                int score = 0;
+                if (!string.IsNullOrEmpty(exact) && string.Equals(candidate.name, exact, StringComparison.Ordinal))
+                    score += 2000;
+                if (candidate.name.StartsWith("Inv_", StringComparison.OrdinalIgnoreCase))
+                    score += 500;
+                if (candidate.name.EndsWith("charm" + charmId, StringComparison.OrdinalIgnoreCase))
+                    score += 300;
+                Rect rect = candidate.rect;
+                score += Mathf.RoundToInt(Mathf.Min(200f, rect.width + rect.height));
+
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    best = candidate;
+                }
+            }
+            return best;
         }
 
         private void ResolveDetailPanel()
@@ -2067,19 +2146,21 @@ namespace CharmsEvolve.UI
 
             int length = string.IsNullOrEmpty(text) ? 0 : text.Length;
             float scale = 1f;
-            if (length > 520)
-                scale = 0.62f;
-            else if (length > 400)
-                scale = 0.70f;
-            else if (length > 300)
-                scale = 0.78f;
-            else if (length > 210)
-                scale = 0.88f;
+            if (length > 420)
+                scale = 0.50f;
+            else if (length > 320)
+                scale = 0.58f;
+            else if (length > 240)
+                scale = 0.66f;
+            else if (length > 160)
+                scale = 0.76f;
+            else if (length > 100)
+                scale = 0.86f;
 
-            float size = Mathf.Max(10f, _originalDescriptionFontSize * scale);
+            float size = Mathf.Max(7.5f, _originalDescriptionFontSize * scale);
             float minimum = _originalDescriptionFontSizeMin > 0f
                 ? Mathf.Min(_originalDescriptionFontSizeMin, size)
-                : Mathf.Max(8f, _originalDescriptionFontSize * 0.52f);
+                : Mathf.Max(6f, _originalDescriptionFontSize * 0.35f);
 
             CharmUtil.TrySetMember(_descriptionText, "enableAutoSizing", true);
             CharmUtil.TrySetMember(_descriptionText, "fontSizeMax", _originalDescriptionFontSizeMax > 0f
@@ -2206,7 +2287,7 @@ namespace CharmsEvolve.UI
             if (_detailIcon != null)
             {
                 Sprite sprite;
-                if (_textures.TryGetSprite(definition.Key, definition.OriginalId, out sprite) && sprite != null)
+                if (TryResolveCharmVisualSprite(definition.Key, definition.OriginalId, slot, out sprite))
                     _detailIcon.sprite = sprite;
                 _detailIcon.color = Color.white;
                 _detailIcon.enabled = _state.IsOwned(definition.Key);
@@ -2828,6 +2909,7 @@ namespace CharmsEvolve.UI
         {
             _slots.Clear();
             _slotByOriginalId.Clear();
+            _nativeSpriteFallbacks.Clear();
             _pane = null;
             _gridRoot = null;
             _uiCharmsFsm = null;
